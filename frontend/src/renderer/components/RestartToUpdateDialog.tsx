@@ -46,6 +46,7 @@ export function RestartToUpdateDialog() {
 function RestartToUpdateDialogBody() {
 	const { t, i18n } = useTranslation();
 	const close = useUiStore((state) => state.closeUpdateInstallPrompt);
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const status = useUpdateStatus(undefined, true);
 	const workspace = useWorkspaceQuery();
 
@@ -150,9 +151,11 @@ function RestartToUpdateDialogBody() {
 				// actionable main-process message, rendered as plain text, and drop
 				// an updater dump (overlong text counts, as in Settings) in favor of
 				// the heading alone (#5755).
-				setFailureDetail(error instanceof Error
+				const detail = error instanceof Error
 					? displayableUpdateError(error.message.replace(/^Error invoking remote method ['"][^'"]+['"]: (?:Error: )?/, "").trim(), "")
-					: "");
+					: "";
+				setFailureDetail(detail);
+				showGlobalToast(t("update.restart.prepareFailed"), detail || undefined, { tone: "error", placement: "top-center" });
 			}
 		} finally {
 			installing.current = false;

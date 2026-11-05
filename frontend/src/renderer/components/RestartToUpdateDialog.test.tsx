@@ -286,6 +286,7 @@ it("shows an inline failure and retries by relaunching AO", async () => {
 	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
 	await act(async () => install.reject(new Error("Error invoking remote method 'updates:install': Error: Couldn't finish preparing the update. Retry to try again.")));
 	expect(screen.getByRole("alert")).toHaveTextContent("AO could not prepare the update. Please try again.");
+	expect(useUiStore.getState().globalToast).toMatchObject({ title: "AO could not prepare the update. Please try again.", body: "Couldn't finish preparing the update. Retry to try again.", tone: "error", placement: "top-center" });
 	expect(screen.getByRole("alert")).toHaveTextContent("Couldn't finish preparing the update. Retry to try again.");
 	expect(screen.getByRole("alert")).not.toHaveTextContent("Error invoking remote method");
 	expect(screen.getByText("Safer updates")).toBeVisible();

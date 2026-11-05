@@ -16,16 +16,22 @@ export interface TerminalShellPreference {
 
 export interface UiSettings {
 	locale: AppLocale;
+	altMenuEnabled: boolean;
+	automaticBrowser: AutomaticBrowserMode;
 	/** Whether attention-worthy notifications (needs input, ready to merge) also play a sound. */
 	soundNotificationsEnabled: boolean;
 	/** Windows shell used for new standalone terminal panes. */
 	terminalShell: TerminalShellPreference;
 }
 
+export type AutomaticBrowserMode = "internal" | "external" | "blocked";
+
 export const DEFAULT_TERMINAL_SHELL: TerminalShellPreference = { kind: "auto" };
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
 	locale: DEFAULT_LOCALE,
+	altMenuEnabled: true,
+	automaticBrowser: "internal",
 	soundNotificationsEnabled: true,
 	terminalShell: DEFAULT_TERMINAL_SHELL,
 };
@@ -60,6 +66,8 @@ export function coerceUiSettings(raw: unknown): UiSettings {
 			: DEFAULT_UI_SETTINGS.soundNotificationsEnabled;
 	return {
 		locale: coerceLocale(record.locale),
+		altMenuEnabled: typeof record.altMenuEnabled === "boolean" ? record.altMenuEnabled : true,
+		automaticBrowser: record.automaticBrowser === "external" || record.automaticBrowser === "blocked" ? record.automaticBrowser : "internal",
 		soundNotificationsEnabled,
 		terminalShell: coerceTerminalShell(record.terminalShell),
 	};

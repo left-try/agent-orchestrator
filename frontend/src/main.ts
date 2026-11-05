@@ -195,6 +195,7 @@ import {
 import type { BrowserProfileMenuInput } from "./shared/browser-profiles";
 import { createWindowComposition, type WindowComposition } from "./main/window-composition";
 import { AgentBrowserRuntime } from "./main/agent-browser-runtime";
+import { enforceAutomaticBrowserPolicy } from "./main/automatic-browser-policy";
 import { sameBrowserRuntimeIdentity, type BrowserRuntimeIdentity } from "./main/browser-runtime-identity";
 import { connectSupervisor, type SupervisorLinkHandle } from "./main/supervisor-link";
 import {
@@ -776,6 +777,15 @@ function buildLinuxAppMenu(): Menu {
 	);
 }
 
+let altMenuEnabled = true;
+let automaticBrowser: UiSettings["automaticBrowser"] = "internal";
+
+function applyAltMenuPreference(): void {
+	if (!mainWindow || process.platform !== "linux") return;
+	mainWindow.setAutoHideMenuBar(altMenuEnabled);
+	mainWindow.setMenuBarVisibility(false);
+}
+
 async function disposeBrowserViewHost(): Promise<void> {
 	const host = browserViewHost;
 	browserViewHost = null;
@@ -861,15 +871,13 @@ async function createWindowInternal(): Promise<void> {
 		...(process.platform === "win32"
 			? {
 					titleBarStyle: "hidden" as const,
-					// Hide the native menu bar. A role-based menu is still installed (for
-					// accelerators) below; the visible menu is painted by WindowTitlebar.
+					// The renderer paints the titlebar; the user can disable Alt-to-reveal.
 					autoHideMenuBar: true,
 				}
 			: process.platform === "linux"
 				? {
-						// Auto-hide the native menu bar strip. Accelerators stay active
-						// via the application menu; pressing Alt reveals the menu bar.
-						autoHideMenuBar: true,
+						// Hide the menu after installing it; Alt-to-reveal is configurable.
+						autoHideMenuBar: altMenuEnabled,
 					}
 				: {
 						titleBarStyle: "hiddenInset" as const,
@@ -906,12 +914,12 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.on("did-start-loading", () => quitConfirm.reset());
 
 	// On Windows the app paints its own title bar (WindowTitlebar), so the native
-	// menu bar is hidden (autoHideMenuBar above). The role-based menu is still
+	// menu bar is hidden below. The role-based menu is still
 	// installed so its accelerators keep working and act on the focused pane;
 	// setMenuBarVisibility(false) keeps the strip itself out of view. macOS gets
 	// an explicit menu so DevTools avoids Electron's unsafe built-in role; Linux
 	// installs the role-based menu so accelerators and guarded DevTools work,
-	// while autoHideMenuBar and setMenuBarVisibility(false) hide the menu strip.
+	// while the visibility and auto-hide settings control the menu strip.
 	if (process.platform === "win32") {
 		Menu.setApplicationMenu(buildWindowsAppMenu());
 		mainWindow.setMenuBarVisibility(false);
@@ -927,6 +935,7 @@ async function createWindowInternal(): Promise<void> {
 		Menu.setApplicationMenu(buildLinuxAppMenu());
 		mainWindow.setMenuBarVisibility(false);
 	}
+	applyAltMenuPreference();
 
 	// Harden navigation: never let renderer/terminal content open in-app windows or
 	// navigate the privileged window away from the app origin. External links go to
@@ -1732,7 +1741,7 @@ function establishBrowserRuntimeLink(): void {
 	if (browserRuntimeLink) dropBrowserRuntimeLink();
 	browserRuntimeLink = connectBrowserRuntime(address, {
 		token,
-		execute: (command, signal) => {
+		execute: async (command, signal) => {
 			// A render check or measure uses its own hidden offscreen window,
 			// never the main window or the session's Browser panel, so it does
 			// not need (or disturb) the view host.
@@ -1742,6 +1751,7 @@ function establishBrowserRuntimeLink(): void {
 			if (command.action === "__render-measure") {
 				return measureRender({ BrowserWindow }, command.args ?? {}, signal);
 			}
+			await enforceAutomaticBrowserPolicy(automaticBrowser, command.action, command.args, (url) => shell.openExternal(url));
 			const host = browserViewHost;
 			if (!host) {
 				throw Object.assign(new Error("Browser target owner is unavailable"), {
@@ -1817,7 +1827,7 @@ async function handleBrowserStreamControl(control: BrowserStreamControl): Promis
 			return;
 		case "preview": {
 			const url = (control.payload as { url?: unknown } | undefined)?.url;
-			if (typeof url === "string") await host.openLivePreview(sessionId, url);
+			if (automaticBrowser === "internal" && typeof url === "string") await host.openLivePreview(sessionId, url);
 			return;
 		}
 		default:
@@ -3332,6 +3342,9 @@ ipcMain.handle("uiSettings:get", async (): Promise<UiSettings> => {
 	trayController?.setLocale(result.locale);
 	soundNotificationsEnabled = result.soundNotificationsEnabled;
 	terminalShellPreference = result.terminalShell;
+	altMenuEnabled = result.altMenuEnabled;
+	automaticBrowser = result.automaticBrowser;
+	applyAltMenuPreference();
 	shellEnvPromise = null;
 	cachedShellEnv = null;
 	return result;
@@ -3906,6 +3919,8 @@ app.whenReady().then(async () => {
 		? await readUiSettings(path.dirname(keybindingRunFile))
 		: { ...DEFAULT_UI_SETTINGS };
 	soundNotificationsEnabled = initialUiSettings.soundNotificationsEnabled;
+	altMenuEnabled = initialUiSettings.altMenuEnabled;
+	automaticBrowser = initialUiSettings.automaticBrowser;
 	terminalShellPreference = initialUiSettings.terminalShell;
 	if (browserQuitRequested) return;
 	if (isTrayEnabled(process.platform)) {
