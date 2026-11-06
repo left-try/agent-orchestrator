@@ -363,7 +363,7 @@ export function useIndependentSideChats(
 	nativeImages: boolean,
 	enabled = true,
 	onNavigate?: (annotation: ChatAnnotationSummaryItem) => void,
-	_onHide?: () => void,
+	onHide?: () => void,
 	canCreate = true,
 ) {
 	const { t } = useTranslation();
@@ -1113,6 +1113,10 @@ export function useIndependentSideChats(
 					if (response.status === 404) {
 						await aoBridge.sideChats.confirmClose(sideId, true);
 						await refreshList();
+						if (sessionRef.current === sessionId && sides.length === 1) {
+							setVisible(false);
+							onHide?.();
+						}
 						return;
 					}
 					// A request timeout is uncertain even when represented as 4xx.
@@ -1121,14 +1125,17 @@ export function useIndependentSideChats(
 					} else await aoBridge.sideChats.capture().catch(() => undefined);
 					throw new Error(apiErrorMessage(requestError));
 				}
-				await aoBridge.sideChats.confirmClose(sideId);
 			} catch (cause) {
 				await refreshList().catch(() => undefined);
 				throw cause;
 			} finally {
 				closeRequests.current.delete(sideId);
 			}
-			if (sessionRef.current !== sessionId) return;
+			const confirmation = aoBridge.sideChats.confirmClose(sideId);
+			if (sessionRef.current !== sessionId) {
+				await confirmation;
+				return;
+			}
 			closedSidesRef.current.add(sideId);
 			setDrafts((current) => {
 				const next = { ...current };
@@ -1142,6 +1149,10 @@ export function useIndependentSideChats(
 			});
 			const remaining = sides.filter((side) => side.id !== sideId);
 			setSides(remaining);
+			if (remaining.length === 0) {
+				setVisible(false);
+				onHide?.();
+			}
 			if (activeId === sideId) {
 				setActiveId(
 					remaining[
@@ -1153,8 +1164,9 @@ export function useIndependentSideChats(
 				);
 				setSnapshot(undefined);
 			}
+			await confirmation;
 		},
-		[sessionId, activeId, sides, refreshList],
+		[sessionId, activeId, sides, refreshList, onHide],
 	);
 
 	const interrupt = useCallback(

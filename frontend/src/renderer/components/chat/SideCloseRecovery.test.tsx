@@ -66,3 +66,17 @@ it("restores the open record after a definitive rejection", async () => {
 	expect(capture).toHaveBeenCalledWith("side", true);
 	expect(pending).toEqual([]);
 });
+
+it("hides the inspector after the last chat is deleted without waiting for close confirmation", async () => {
+	let finishConfirmation!: () => void;
+	confirmClose.mockImplementationOnce(() => new Promise<void>((resolve) => { finishConfirmation = resolve; }));
+	remove.mockResolvedValueOnce({});
+	const onHide = vi.fn();
+	const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false, true, undefined, onHide));
+	await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+	let closing!: Promise<void>;
+	act(() => { closing = hook.result.current.close("side"); });
+	await waitFor(() => expect(onHide).toHaveBeenCalledOnce());
+	expect(hook.result.current.sides).toEqual([]);
+	await act(async () => { finishConfirmation(); await closing; });
+});
