@@ -1,0 +1,77 @@
+import { Box, Code2, Folder, Heart, Rocket, Star, type LucideIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Button } from "./ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
+
+const icons = { folder: Folder, code: Code2, box: Box, rocket: Rocket, star: Star, heart: Heart } satisfies Record<string, LucideIcon>;
+const colors = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899"];
+const key = "ao.projectIconOverrides";
+export type ProjectIconChoice = { type: "image"; src: string } | { type: "symbol"; icon: keyof typeof icons; color: string };
+
+function readChoices(): Record<string, ProjectIconChoice> {
+ try { return JSON.parse(localStorage.getItem(key) || "{}") || {}; } catch { return {}; }
+}
+export function readProjectIcon(id: string): ProjectIconChoice | undefined { return readChoices()[id]; }
+function saveChoice(id: string, choice?: ProjectIconChoice) {
+ const choices = readChoices();
+ if (choice) choices[id] = choice; else delete choices[id];
+ localStorage.setItem(key, JSON.stringify(choices));
+}
+export function CustomProjectIcon({ choice, className }: { choice: ProjectIconChoice; className?: string }) {
+ const [failedSrc, setFailedSrc] = useState<string>();
+ if (choice.type === "image") {
+  if (failedSrc === choice.src) return <Folder className={className ?? "size-icon-md"} aria-hidden="true" />;
+  return <img alt="" src={choice.src} onError={() => setFailedSrc(choice.src)} className={`${className ?? "size-icon-md"} rounded-[4px] object-cover`} />;
+ }
+ const Icon = icons[choice.icon] ?? Folder;
+ return <span className={className ?? "size-icon-md"} style={{ color: choice.color }}><Icon className="size-full" strokeWidth={1.75} /></span>;
+}
+
+export function ProjectIconDialog({ open, onOpenChange, projectName, value, onSave, projectId }: {
+ open: boolean; onOpenChange: (open: boolean) => void; projectName: string; value?: ProjectIconChoice;
+ onSave: (choice?: ProjectIconChoice) => void; projectId: string;
+}) {
+ const [choice, setChoice] = useState<ProjectIconChoice | undefined>(value);
+ const [url, setUrl] = useState("");
+ const [error, setError] = useState("");
+ useEffect(() => { if (open) { setChoice(value); setUrl(value?.type === "image" && value.src.startsWith("https://") ? value.src : ""); setError(""); } }, [open, value]);
+ const symbol = choice?.type === "symbol" ? choice : { type: "symbol" as const, icon: "folder" as const, color: colors[5] };
+ const save = (next?: ProjectIconChoice) => {
+  try { saveChoice(projectId, next); onSave(next); onOpenChange(false); }
+  catch { setError("Could not save the icon. Free up storage and try again."); }
+ };
+ const upload = (file?: File) => {
+  if (!file) return;
+  if (file.type !== "image/png" || file.size > 5 * 1024 * 1024) { setError("Choose a PNG image smaller than 5 MB."); return; }
+  const reader = new FileReader();
+  reader.onerror = () => setError("Could not read this image.");
+  reader.onload = () => {
+   const image = new Image();
+   image.onerror = () => setError("Could not open this PNG image.");
+   image.onload = () => {
+    const canvas = document.createElement("canvas"); canvas.width = 128; canvas.height = 128;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) { setError("Could not process this image."); return; }
+    const side = Math.min(image.width, image.height);
+    ctx.drawImage(image, (image.width - side) / 2, (image.height - side) / 2, side, side, 0, 0, 128, 128);
+    setChoice({ type: "image", src: canvas.toDataURL("image/png") }); setError("");
+   };
+   image.src = String(reader.result);
+  };
+  reader.readAsDataURL(file);
+ };
+ return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.stopPropagation()}>
+  <DialogTitle>Customize project icon</DialogTitle>
+  <DialogDescription>Choose an icon for {projectName}. This setting is saved on this device.</DialogDescription>
+  <div className="space-y-4 text-sm">
+   <button type="button" className="rounded border px-3 py-2 hover:bg-accent" onClick={() => { setChoice(undefined); setError(""); }}>Use repository icon (default)</button>
+   <div><p className="mb-2 font-medium">Icon</p><div className="flex flex-wrap gap-2">{Object.entries(icons).map(([name, Icon]) => <button key={name} type="button" aria-label={name} aria-pressed={choice?.type === "symbol" && choice.icon === name} className="rounded border p-2 aria-pressed:ring-2" onClick={() => setChoice({ ...symbol, icon: name as keyof typeof icons })}><Icon className="size-5" style={{ color: symbol.color }} /></button>)}</div></div>
+   <div><p className="mb-2 font-medium">Color</p><div className="flex flex-wrap gap-2">{colors.map((color) => <button key={color} type="button" aria-label={`Color ${color}`} aria-pressed={choice?.type === "symbol" && choice.color === color} className="size-7 rounded-full border aria-pressed:ring-2 aria-pressed:ring-offset-2" style={{ backgroundColor: color }} onClick={() => setChoice({ ...symbol, color })} />)}</div></div>
+   <div className="space-y-2"><label className="block font-medium" htmlFor={`icon-url-${projectId}`}>Image URL (HTTPS)</label><div className="flex gap-2"><input id={`icon-url-${projectId}`} className="min-w-0 flex-1 rounded border bg-transparent px-2 py-1" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/icon.png" /><Button type="button" variant="outline" onClick={() => { try { const parsed = new URL(url); if (parsed.protocol !== "https:") throw new Error(); setChoice({ type: "image", src: parsed.href }); setError(""); } catch { setError("Enter a valid HTTPS image URL."); } }}>Use URL</Button></div></div>
+   <label className="block font-medium">Upload PNG <input type="file" accept="image/png" className="mt-2 block w-full text-sm" onChange={(e) => upload(e.target.files?.[0])} /></label>
+   <div className="flex items-center gap-2">Preview: {choice ? <CustomProjectIcon choice={choice} className="size-8 rounded object-cover" /> : <span className="text-muted-foreground">Repository icon</span>}</div>
+   {error && <p role="alert" className="text-destructive">{error}</p>}
+   <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button onClick={() => save(choice)}>Save</Button></div>
+  </div>
+ </DialogContent></Dialog>;
+}
