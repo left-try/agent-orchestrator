@@ -26,7 +26,7 @@ import { BranchNamingLabel } from "./BranchNamingLabel";
 import { formatTimeCompact } from "../lib/format-time";
 import { prBrowserUrl, sessionPRDisplaySummaries } from "../lib/pr-display";
 import { agentLabel } from "../lib/agent-options";
-import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
+import type { SessionArtifact, WorkspaceRepoSummary, WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId, sessionArtifacts } from "../types/workspace";
 import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import type { ChipTone } from "@aoagents/product-ui";
@@ -53,6 +53,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { someoneElseWorking, type SessionPerson } from "../lib/session-people";
 import { SessionPeopleStack } from "./SessionPeople";
 import { SessionOwnerTag } from "./SessionOwnerTag";
+import { WorkspaceFolderMarker } from "./WorkspaceFolderMarker";
 
 export function toBoardSessionPresentation(
 	session: WorkspaceSession,
@@ -109,6 +110,7 @@ export function BoardSessionCardAdapter({
 	onOpenArtifacts,
 	onTerminate,
 	session,
+	repos = [],
 }: {
 	/** Live reading of the session's process tree, for the card's resource chip. */
 	memory?: SessionMemoryReading;
@@ -120,6 +122,7 @@ export function BoardSessionCardAdapter({
 	onOpenArtifacts?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
+	repos?: readonly WorkspaceRepoSummary[];
 	/** The people in this session when it is shared. */
 	participants?: readonly SessionPerson[];
 	/** The signed-in cloud user, to tell their own work from someone else's. */
@@ -136,6 +139,7 @@ export function BoardSessionCardAdapter({
 			onOpenArtifacts={onOpenArtifacts}
 			onTerminate={onTerminate}
 			session={session}
+			repos={repos}
 		/>
 	);
 }
@@ -209,6 +213,7 @@ function DesktopSessionCard({
 	onTerminate,
 	session,
 	still = false,
+	repos = [],
 }: {
 	action?: ReactNode;
 	branchAction?: ReactNode;
@@ -222,6 +227,7 @@ function DesktopSessionCard({
 	onOpenArtifacts?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
+	repos?: readonly WorkspaceRepoSummary[];
 	participants?: readonly SessionPerson[];
 	me?: string;
 	still?: boolean;
@@ -295,6 +301,7 @@ function DesktopSessionCard({
 
 	const newSidebarDesign = useUiStore(isNewSidebarDesign);
 	const card = (
+		<>
 		<SessionCardView
 			action={action}
 			artifacts={
@@ -353,6 +360,8 @@ function DesktopSessionCard({
 			legacyStatus={!newSidebarDesign}
 			translate={translate}
 		/>
+		<div className="px-3 pb-2"><WorkspaceFolderMarker session={session} repos={repos} /></div>
+		</>
 	);
 	if (!interactive) return card;
 	return (

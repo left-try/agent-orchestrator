@@ -59,6 +59,7 @@ import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useDiagnosticsEnabled, usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
 import { AppMemoryIndicator, toSessionFacts } from "./SessionMemoryPanel";
 import { Button } from "./ui/button";
+import { filterSessionsByFolder } from "../lib/workspace-folder";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import {
 	ArchivedSessionCardAdapter,
@@ -91,6 +92,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const shell = useShellMaybe();
 	const connected = useConnectedHosts().includes(hostId ?? "");
 	const scopeKey = refKey({ host: hostId ?? LOCAL_HOST, id: projectId ?? "all" });
+	const [folderFilter, setFolderFilter] = useState("all");
 	// Lanes follow the daemon's delivery order: building -> validating ->
 	// in review -> ready. The middle two are one review-feedback loop, split by
 	// whose turn it is.
@@ -167,7 +169,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	// Who is in each shared cloud session, read without joining any of them.
 	const participantsBySession = useSessionParticipants(activeSessions, !hostId);
 	const { userId: cloudUserId } = useCloudCp(!hostId && activeSessions.some((session) => Boolean(session.cloud)));
-	const boardSessions = activeSessions.map((session) =>
+	const folderRepos = workspace?.workspaceRepos ?? [];
+	const boardSessions = filterSessionsByFolder(activeSessions, folderFilter, folderRepos).map((session) =>
 		session.status === "no_signal" || session.displayStatus === "No signal"
 			? { ...session, kanbanColumn: "building" as const }
 			: session,
@@ -337,6 +340,15 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 				) : showProjectEmpty ? (
 					<ProjectBoardEmpty actions={guest ? null : <ProjectBoardActions actions={projectActions} placement="empty" />} />
 				) : (
+					<div className="flex h-full min-h-0 flex-col">
+						{folderRepos.length > 0 ? <label className="flex shrink-0 items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+							<span>{t("shell.folderFilter", { defaultValue: "Folder" })}</span>
+							<select aria-label={t("shell.folderFilter", { defaultValue: "Folder" })} className="h-7 rounded-md border border-border bg-background px-2 text-foreground" value={folderFilter} onChange={(event) => setFolderFilter(event.target.value)}>
+								<option value="all">{t("shell.allFolders", { defaultValue: "All folders" })}</option>
+								<option value="__workspace_wide__">{t("shell.workspaceWide", { defaultValue: "Workspace-wide" })}</option>
+								{folderRepos.map((repo) => <option key={repo.relativePath} value={repo.relativePath}>{repo.name}</option>)}
+							</select>
+						</label> : null}
 					<SessionsBoardGridView
 						columns={columns}
 						key={scopeKey}
@@ -352,10 +364,12 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 								onOpenArtifacts={() => openSessionArtifacts(session)}
 								onTerminate={!hostId || connected ? ({ deleteArtifacts }) => terminateSession.mutate({ ...session, deleteArtifacts }) : undefined}
 								session={session}
+								repos={folderRepos}
 							/>
 						)}
 						sessions={boardSessions}
 					/>
+					</div>
 				)}
 			</div>
 
