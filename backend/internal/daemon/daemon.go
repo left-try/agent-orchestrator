@@ -1322,6 +1322,9 @@ func Run(buildVersion string) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
+					if err := chatSvc.HibernateIdleReviewers(ctx); err != nil && ctx.Err() == nil {
+						log.Warn("idle reviewer hibernation failed", "err", err)
+					}
 					if !settingsSvc.ChatHibernationEnabled() {
 						continue
 					}

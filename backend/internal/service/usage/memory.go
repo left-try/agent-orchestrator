@@ -24,6 +24,7 @@ type memorySessionStore interface {
 // outlive the worker session that spawned it.
 type memoryReviewerStore interface {
 	ListLiveReviewerHandles(context.Context) ([]domain.ReviewerHandle, error)
+	ListRecoverableChatReviews(context.Context) ([]domain.Review, error)
 }
 
 // MemoryReaderDeps wires the memory reader. Snapshot defaults to a real `ps`
@@ -289,6 +290,29 @@ func (r *MemoryReader) AppMemory(ctx context.Context) (domain.AppMemory, error) 
 			reviewers = append(reviewers, domain.ReviewerMemory{
 				ReviewID: h.ReviewID, SessionID: h.SessionID, Harness: h.Harness, Memory: reading,
 			})
+		}
+		if r.deps.ChatHostPID != nil {
+			chats, err := r.deps.Reviewers.ListRecoverableChatReviews(ctx)
+			if err != nil {
+				return domain.AppMemory{}, err
+			}
+			for _, chat := range chats {
+				pid, ok := r.deps.ChatHostPID(domain.SessionID("review-" + chat.ID))
+				if !ok || pid <= 0 {
+					continue
+				}
+				reviewerTree := table.Tree(pid)
+				if len(reviewerTree.Processes) == 0 {
+					continue
+				}
+				roots = append(roots, pid)
+				for _, p := range reviewerTree.Processes {
+					inReviewer[p.PID] = true
+				}
+				reading := treeReading(reviewerTree, prev, elapsed)
+				reading.SampledAt = r.deps.Now()
+				reviewers = append(reviewers, domain.ReviewerMemory{ReviewID: chat.ID, SessionID: chat.SessionID, Harness: chat.Harness, Memory: reading})
+			}
 		}
 	}
 	tree := table.Tree(roots...)
