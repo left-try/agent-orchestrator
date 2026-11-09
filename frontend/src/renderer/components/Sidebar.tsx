@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { CustomProjectIcon, ProjectIconDialog, readProjectIcon, type ProjectIconChoice } from "./ProjectIconDialog";
 import { useProjectAvatars } from "../hooks/useProjectAvatars";
 import { paidPlanBadge, useCloudBilling } from "../hooks/useCloudBilling";
 import { useTranslation } from "react-i18next";
@@ -1577,6 +1578,8 @@ const ProjectItem = memo(function ProjectItem({
 	const [removeError, setRemoveError] = useState<string | null>(null);
 	const [isRemoving, setIsRemoving] = useState(false);
 	const [confirmOpen, setConfirmOpen] = useState(false);
+	const [iconOpen, setIconOpen] = useState(false);
+	const [customIcon, setCustomIcon] = useState<ProjectIconChoice | undefined>(() => readProjectIcon(sessionUiKey(workspace.id, workspace.hostId)));
 	const [isSpawning, setIsSpawning] = useState(false);
 	// Skip enter animation on first mount — sessions arrive async and we don't
 	// want them to slide in on every sidebar load. Only animate on subsequent
@@ -1912,7 +1915,7 @@ const ProjectItem = memo(function ProjectItem({
 										>
 											{!expanded && projectNeedsInput ? (
 												<SessionMarkerIcon data-project-marker="attention" marker="attention" />
-											) : <ProjectIcon avatarUrl={avatarUrl} expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />}
+											) : <ProjectIcon customIcon={customIcon} avatarUrl={avatarUrl} expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />}
 										</span>
 										<span
 											className={cn(
@@ -1933,7 +1936,7 @@ const ProjectItem = memo(function ProjectItem({
 										aria-hidden="true"
 										className="relative z-[1] hidden size-8 items-center justify-center group-data-[collapsible=icon]:inline-flex"
 									>
-										<ProjectIcon avatarUrl={avatarUrl} className="size-5" expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />
+										<ProjectIcon customIcon={customIcon} avatarUrl={avatarUrl} className="size-5" expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />
 										{projectNeedsInput ? (
 											<span
 												className="absolute right-0.5 top-0.5 size-2 rounded-full bg-destructive ring-2 ring-sidebar"
@@ -2087,7 +2090,8 @@ const ProjectItem = memo(function ProjectItem({
 														{isPinned ? t("shell.unpinProject") : t("shell.pinProject")}
 													</DropdownMenuItem>
 												) : null}
-												<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
+												<DropdownMenuItem onSelect={() => setIconOpen(true)}><Folder aria-hidden="true" />Customize icon</DropdownMenuItem>
+																<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
 													<Settings aria-hidden="true" />
 													{t("shell.projectSettings")}
 												</DropdownMenuItem>
@@ -2178,6 +2182,7 @@ const ProjectItem = memo(function ProjectItem({
 							</motion.div>
 						)}
 					</AnimatePresence>
+					<ProjectIconDialog open={iconOpen} onOpenChange={setIconOpen} projectName={workspace.name} projectId={sessionUiKey(workspace.id, workspace.hostId)} value={customIcon} onSave={setCustomIcon} />
 					<ConfirmDialog
 						open={confirmOpen}
 						onOpenChange={setConfirmOpen}
@@ -2240,6 +2245,7 @@ const ProjectItem = memo(function ProjectItem({
 						{isPinned ? t("shell.unpinProject") : t("shell.pinProject")}
 					</ContextMenuItem>
 				) : null}
+				{!isStandalone && <ContextMenuItem onSelect={() => setIconOpen(true)}><Folder aria-hidden="true" />Customize icon</ContextMenuItem>}
 				{!isStandalone && <ContextMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
 					<Settings aria-hidden="true" />
 					{t("shell.projectSettings")}
@@ -3607,12 +3613,14 @@ function projectTileColor(seed: string): string {
  *  squircle, or a colour-coded first-letter tile while it loads and when there
  *  is no avatar or it fails. With them off: a folder. */
 function ProjectIcon({
+	customIcon,
 	avatarUrl,
 	name,
 	seed,
 	expanded,
 	className,
 }: {
+	customIcon?: ProjectIconChoice;
 	avatarUrl?: string;
 	name: string;
 	seed: string;
@@ -3622,6 +3630,7 @@ function ProjectIcon({
 	const avatarsEnabled = useUiStore((state) => state.projectAvatars && isNewSidebarDesign(state));
 	const [loadedUrl, setLoadedUrl] = useState<string>();
 	const [failedUrl, setFailedUrl] = useState<string>();
+	if (customIcon) return <CustomProjectIcon choice={customIcon} className={className} />;
 	if (!avatarsEnabled) {
 		const Icon = expanded ? FolderOpen : Folder;
 		return <Icon className={className} />;
