@@ -226,7 +226,7 @@ describe("TurnChangedFiles", () => {
 
 	it("says the list was cut rather than presenting it as the whole change", () => {
 		render(<TurnChangedFiles diff={diff({ truncated: true })} onReview={() => {}} />);
-		expect(screen.getByText(/changed more files than AO lists/i)).toBeInTheDocument();
+		expect(screen.getByText(/changed more files than Orchestrator lists/i)).toBeInTheDocument();
 		expect(screen.getByText(/Use Review for the whole change/i)).toBeInTheDocument();
 	});
 
@@ -269,7 +269,7 @@ describe("ActivityRow command output", () => {
 		expect(shown).toContain("END_OVERSIZE");
 		expect(shown).not.toContain("BEGIN_OVERSIZE");
 		expect(screen.getByText("Showing the end of this large output.")).toBeInTheDocument();
-		expect(screen.queryByText(/printed more than AO stores/i)).not.toBeInTheDocument();
+		expect(screen.queryByText(/printed more than Orchestrator stores/i)).not.toBeInTheDocument();
 	});
 
 	it("bounds single-line output without splitting a surrogate pair", () => {
@@ -342,7 +342,7 @@ describe("ActivityRow command output", () => {
 			/>,
 		);
 		await userEvent.click(screen.getByRole("button"));
-		expect(screen.getByText(/printed more than AO stores/i)).toBeInTheDocument();
+		expect(screen.getByText(/printed more than Orchestrator stores/i)).toBeInTheDocument();
 	});
 
 	it("keeps a finished command collapsed so the timeline stays readable", () => {
@@ -538,7 +538,7 @@ describe("ActivityRow command labels", () => {
 		);
 		expect(screen.getByText("exit 1")).toHaveClass("text-muted-foreground/70");
 		expect(screen.getByText("exit 1")).not.toHaveClass("text-destructive");
-		expect(container.querySelector(".lucide-square-terminal")).toBeNull();
+		expect(container.querySelector(".icon-square-terminal")).toBeNull();
 		expect(row.querySelector(".flex-1")).toBeNull();
 		expect(row.textContent).toMatch(/^Checked repositoryexit 1/);
 	});

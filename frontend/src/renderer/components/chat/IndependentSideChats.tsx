@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { flushSync } from "react-dom";
 import type { PendingSideClose } from "../../../shared/side-close";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { ArrowUp, Loader2, MessageSquare, Pencil, Plus, Square, X } from "lucide-react";
+import { ArrowUp, Loader2, MessageSquare, Pencil, Plus, Square, X } from "@/components/app-icons";
 import type { components } from "../../../api/schema";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import type { ChatSkill } from "../../types/conversation";
@@ -135,7 +135,6 @@ export function SideComposer({
 		Boolean(draft.text.trim() || files.length || draft.attachments.length || draft.references.length);
 	return (
 		<div className="cursor-chat-composer-dock shrink-0 px-4 pb-3">
-			<div aria-hidden="true" className="chat-composer-fade" />
 			<div className="mx-auto w-full max-w-3xl">
 				{queuedDock}
 				<form
@@ -614,7 +613,7 @@ export function useIndependentSideChats(
 	const create = useCallback(
 		async (excerpt?: ChatDraftExcerptReference, forceNew = false, idempotencyKey: string = crypto.randomUUID(),
 			options?: { isCurrent?: () => boolean; shouldActivate: () => boolean }) => {
-			if (!enabled) throw new Error("Side chats are currently available only for local AO sessions.");
+			if (!enabled) throw new Error("Side chats are currently available only for local Orchestrator-managed sessions.");
 			if (!canCreate) throw new Error("The current provider does not support resumable side chats.");
 			const owned = () => creationScope.active && creationScopeRef.current === creationScope && sessionRef.current === sessionId;
 			const current = () => owned() && (options?.isCurrent?.() ?? true);
@@ -1282,8 +1281,6 @@ export function useIndependentSideChats(
 	);
 	const {
 		scrollRef: tabStripRef,
-		showLeftFade,
-		showRightFade,
 		scrollToEnd,
 	} = useTabScrollEdges([sides.length, visible]);
 	const previousTabCount = useRef(sides.length);
@@ -1331,7 +1328,7 @@ export function useIndependentSideChats(
 					role="tablist"
 					aria-label={t("sideChat.tabs")}
 					onKeyDown={handleTabListKeyDown}
-					className="browser-panel__tab-strip"
+					className="browser-panel__tab-strip edge-fade edge-fade-x"
 				>
 					{sides.map((side) => {
 						const tab = (
@@ -1417,10 +1414,6 @@ export function useIndependentSideChats(
 						);
 					})}
 				</div>
-				{showLeftFade ? (
-					<div aria-hidden="true" className="browser-panel__tab-fade browser-panel__tab-fade--left" />
-				) : null}
-				{showRightFade ? <div aria-hidden="true" className="browser-panel__tab-fade" /> : null}
 			</div>
 			<Pressable
 				type="button"
@@ -1502,7 +1495,7 @@ export function useIndependentSideChats(
 					<Button type="button" size="sm" onClick={() => void resolveInput(activeId, requestId, "accept")}>
 						{t("sideChat.submit")}
 					</Button>
-					<Button type="button" size="sm" variant="outline" onClick={() => void resolveInput(activeId, requestId, "decline")}>
+					<Button type="button" size="sm" variant="secondary" onClick={() => void resolveInput(activeId, requestId, "decline")}>
 						{t("sideChat.decline")}
 					</Button>
 				</div>
@@ -1520,7 +1513,7 @@ export function useIndependentSideChats(
 				{pendingCloses.some((side) => side.id === activeId) ? (
 					<div className="p-4" role="status">
 						<p>{t("sideChat.closing")}</p>
-						<Button type="button" variant="outline" size="sm" disabled={closing} onClick={() => {
+						<Button type="button" variant="secondary" size="sm" disabled={closing} onClick={() => {
 							if (!currentActiveId) return;
 							setClosing(true);
 							void close(currentActiveId).catch((cause) => setError(String(cause))).finally(() => setClosing(false));
@@ -1571,7 +1564,7 @@ export function useIndependentSideChats(
 						{snapshot.side.state === "failed" && snapshot.side.recreateRequired ? (
 							<Button
 								type="button"
-								variant="outline"
+								variant="secondary"
 								size="sm"
 								onClick={() => void create(undefined, true).catch(() => undefined)}
 								disabled={!canCreate || pending}
@@ -1581,7 +1574,7 @@ export function useIndependentSideChats(
 						) : snapshot.side.state === "failed" ? (
 							<Button
 								type="button"
-								variant="outline"
+								variant="secondary"
 								size="sm"
 								onClick={() =>
 									void apiClient
@@ -1752,7 +1745,7 @@ export function useIndependentSideChats(
 						{error ? (
 							<Button
 								type="button"
-								variant="outline"
+								variant="secondary"
 								size="sm"
 								onClick={() => {
 									setError(undefined);

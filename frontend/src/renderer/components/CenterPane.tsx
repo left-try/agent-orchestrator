@@ -42,8 +42,7 @@ import { SessionTabsTopbar } from "./PageTopbar";
 import { beginPaneTabDrag } from "../lib/pane-drag";
 import { SESSION_TAB_KEY } from "../lib/pane-split";
 import { useSplitCloseFocused, useSplitHiddenTabKeys } from "./split-pane-context";
-import { SessionContextMenuItems } from "./SessionContextMenuItems";
-import { ArchiveSessionMenuItem, TabContextMenu } from "./TabContextMenu";
+import { TabContextMenu, TabMenuSpecContext, type TabMenuSpec } from "./TabContextMenu";
 
 type CenterPaneProps = {
 	session?: WorkspaceSession;
@@ -93,8 +92,8 @@ export type CenterPaneWorkspaceTab = {
 	content: ReactNode;
 	onSelect: () => void;
 	onClose?: () => void;
-	/** The tab's own right-click actions, above Close tab. */
-	menuItems?: ReactNode;
+	/** The tab's menu; absent, the tab draws its own (a split group's tab). */
+	menu?: TabMenuSpec;
 };
 
 type AuxiliaryTab =
@@ -309,8 +308,6 @@ export function CenterPane({
 	const {
 		scrollRef: tabsOverflowRef,
 		scrollToEnd: scrollTabsToEnd,
-		showLeftFade,
-		showRightFade,
 	} = useTabScrollEdges([isFullscreen, tabOverflowWatch]);
 	const previousTabCountRef = useRef(availableAuxiliaryKeys.length);
 	const target = terminalTarget ?? { kind: "worker" };
@@ -573,7 +570,7 @@ export function CenterPane({
 							<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
 								<motion.div
 									ref={tabsOverflowRef}
-									className="session-tab-scroll-region scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto"
+									className="session-tab-scroll-region edge-fade edge-fade-x scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto"
 									data-tab-scroll-region
 									layoutScroll
 								>
@@ -641,9 +638,11 @@ export function CenterPane({
 														stripShellHandleIds={stripShellHandleIds}
 													/>
 												) : (
-													<TabContextMenu closeShortcut={tab.key === workspaceActiveTabKey} items={tab.tab.menuItems} onClose={tab.tab.onClose} tabKey={tab.key}>
-														{tab.tab.content}
-													</TabContextMenu>
+													tab.tab.menu ? (
+														<TabContextMenu spec={{ ...tab.tab.menu, closeShortcut: tab.key === workspaceActiveTabKey }}>
+															{tab.tab.content}
+														</TabContextMenu>
+													) : tab.tab.content
 												)}
 											</DraggableWorkspaceTab>
 										))}
@@ -651,8 +650,6 @@ export function CenterPane({
 									{workspaceTabActions}
 								</div>
 							</motion.div>
-								{showLeftFade ? <div aria-hidden="true" className="session-tab-scroll-fade session-tab-scroll-fade--left" /> : null}
-								{showRightFade ? <div aria-hidden="true" className="session-tab-scroll-fade" /> : null}
 							</div>
 					</div>
 			}
@@ -711,7 +708,7 @@ export function CenterPane({
 // match the close and menu controls: a 16px box, 13px glyph, 28px hit area.
 const sessionTabActionClassName = cn(
 	"grid place-items-center [&_svg]:size-icon-sm",
-	"[&_.topbar-control--icon]:relative [&_.topbar-control--icon]:size-icon-base [&_.topbar-control--icon]:rounded-sm [&_.topbar-control--icon]:before:absolute [&_.topbar-control--icon]:before:-inset-1.5 [&_.topbar-control--icon]:before:content-['']",
+	"[&_[data-interface-switch]]:relative [&_[data-interface-switch]]:size-icon-base [&_[data-interface-switch]]:rounded-sm [&_[data-interface-switch]]:after:absolute [&_[data-interface-switch]]:after:-inset-1.5 [&_[data-interface-switch]]:after:content-['']",
 	"[&_[role=status]]:size-icon-base [&_[role=status]_button]:rounded-sm [&_[role=status]_button]:before:absolute [&_[role=status]_button]:before:-inset-1.5 [&_[role=status]_button]:before:content-['']",
 );
 
@@ -822,22 +819,21 @@ export function SessionPaneTab({
 		/>
 	);
 	if (rename.isEditing || (!session && !tabMenu)) return tabFrame;
-	// Only where the ⇧⌘A confirmation is mounted (SessionTopbarActions): an
-	// active local or remote worker. The orchestrator goes with its project.
-	const canArchive = Boolean(session && !isOrchestratorSession(session) && !session.cloud && sessionIsActive(session));
+	// Archive only where the ⇧⌘A confirmation is mounted (SessionTopbarActions):
+	// an active local or remote worker. The orchestrator goes with its project.
+	const menu: TabMenuSpec = session
+		? {
+				kind: "session",
+				tabKey,
+				session,
+				onRename: renameSession ? rename.begin : undefined,
+				canArchive: !isOrchestratorSession(session) && !session.cloud && sessionIsActive(session),
+			}
+		: { kind: "plain", tabKey };
+	// The ⋮ button in the action slot opens this same spec.
 	return (
-		<TabContextMenu
-			destructive={canArchive ? <ArchiveSessionMenuItem /> : undefined}
-			items={session ? (
-				<SessionContextMenuItems
-					onRename={renameSession ? rename.begin : undefined}
-					renameShortcut={renameSession ? "F2" : undefined}
-					session={session}
-				/>
-			) : undefined}
-			tabKey={tabKey}
-		>
-			{tabFrame}
-		</TabContextMenu>
+		<TabMenuSpecContext.Provider value={menu}>
+			<TabContextMenu spec={menu}>{tabFrame}</TabContextMenu>
+		</TabMenuSpecContext.Provider>
 	);
 }

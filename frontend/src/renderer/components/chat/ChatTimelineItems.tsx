@@ -9,7 +9,7 @@ import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
  * re-sorting. Those belong to the daemon.
  */
 
-import { stagedAttachmentParts, attachmentName, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
+import { stagedAttachmentParts, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
 import { ChatImage } from "./ChatImage";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
@@ -21,6 +21,8 @@ import { agentLabel } from "../../lib/agent-options";
 import { recordedModelName } from "../../lib/agent-model-choices";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import { ProviderMark } from "./ProviderMark";
+import { useChatSessionId } from "./chat-image-source";
+import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
@@ -52,7 +54,7 @@ import {
 	Undo2,
 	User,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 
 /** Fixed icon column, matching the prototype's row anatomy. */
 const activityIcon: Record<ActivityKind, typeof SquareTerminal> = {
@@ -73,6 +75,7 @@ import { cn } from "../../lib/utils";
 import { caretNotation, stripAnsi } from "../../lib/ansi";
 import { getApiBaseUrl } from "../../lib/api-client";
 import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
+import { aoToolView, mcpToolArguments, mcpToolName, type AOToolView } from "../../lib/mcp-tool";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
@@ -84,6 +87,7 @@ import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
 import { ConversationBranchNavigator } from "./ConversationBranchNavigator";
 import { ConversationContentItems } from "./ConversationContentItems";
+import { StagedAttachmentItems } from "./StagedAttachmentItems";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
@@ -778,48 +782,6 @@ function ProseWithInlineImages({
 	);
 }
 
-function StagedAttachmentItems({
-	paths,
-	sessionId,
-	apiBaseUrl,
-	ariaLabel,
-	className,
-}: {
-	paths: string[];
-	sessionId: string;
-	apiBaseUrl: string | null;
-	ariaLabel: string;
-	className?: string;
-}) {
-	const { t } = useTranslation();
-	if (paths.length === 0) return null;
-	const images = paths.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
-	return (
-		<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
-			{paths.map((path) => {
-				const name = attachmentName(path);
-				return IMAGE_ATTACHMENT_PATH.test(path) && apiBaseUrl !== null ? (
-					<li key={path} className="max-w-full">
-						<ChatImage
-							src={attachmentURL(apiBaseUrl, sessionId, path)}
-							alt={t("chat.image.numbered", { index: images.indexOf(path) + 1 })}
-						/>
-					</li>
-				) : (
-					<li
-						key={path}
-						title={path}
-						className="flex max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground"
-					>
-						<FileIcon aria-hidden="true" className="size-3.5 shrink-0" />
-						<span className="truncate">{name}</span>
-					</li>
-				);
-			})}
-		</ul>
-	);
-}
-
 /** Collapse the home directory so a long absolute path does not eat the row. */
 function shortenPaths(text: string): string {
 	return text.replace(/\/(?:Users|home)\/[^/\s]+/g, "~");
@@ -981,6 +943,26 @@ export function HumanMessage({
 	const excerptReferences = (message.content ?? []).filter(
 		(content) => (content.type === "excerpt" && Boolean(content.text)) || Boolean(content.fileReference),
 	);
+	const annotationSummary = excerptReferences.length > 0 ? (
+		<ChatAnnotationSummary
+			annotations={excerptReferences.map((excerpt) => ({
+				fileReference: excerpt.fileReference, id: excerpt.annotationId ?? excerpt.fileReference?.id, order: excerpt.annotationOrder ?? excerpt.fileReference?.order,
+				text: excerpt.text ?? "",
+				conversationId: excerpt.sourceConversationId,
+				messageId: excerpt.sourceMessageId,
+				revision: excerpt.sourceRevision,
+			}))}
+			onSelect={onSelectAnnotation}
+			className="mb-2"
+		/>
+	) : null;
+	// Hover-only actions float under the bubble instead of reserving a blank row;
+	// a branch navigator is always visible, so it keeps its place in the flow.
+	const inFlowActions = Boolean(branchPoint && onActivateBranch);
+	const actionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : "absolute right-0 top-full z-10");
+	// The editor's Cancel and Send float too, so starting an edit moves nothing. They
+	// sit on the "Worked for" line the turn reserves one row gap (10px) under the bubble.
+	const editActionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : "absolute right-0 top-[calc(100%+0.625rem)] z-10");
 	return (
 		<div
 			className="group/message relative flex flex-col items-end gap-1"
@@ -988,7 +970,7 @@ export function HumanMessage({
 			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
 			data-chat-message-role={!queued && !editing ? message.role : undefined}
 		>
-			{message.authorName && !editing ? (
+			{message.authorName ? (
 				<span className="max-w-full truncate px-1 text-xs text-muted-foreground" data-chat-message-author>
 					{message.authorName}
 				</span>
@@ -996,9 +978,17 @@ export function HumanMessage({
 			{/* A queued message reads as not-yet-sent rather than as sent-and-ignored:
 			    the agent has not seen it, and the timeline should not imply it has. */}
 			{editing ? (
+				// The bubble itself becomes the editor: same box, text and attachments.
 				<HumanMessageEditor
 					text={editText ?? visibleMessageText}
-					content={message.content ?? []}
+					originalText={visibleMessageText}
+					content={(message.content ?? []).filter((content) => !excerptReferences.includes(content))}
+					sessionId={sessionId}
+					apiBaseUrl={apiBaseUrl}
+					className={humanBubbleClass()}
+					actionsClassName={editActionRowClass}
+					leading={annotationSummary}
+					cloudAttachments={<CloudMessageAttachments attachments={message.cloudAttachments} className="mb-2" />}
 					pending={editPending}
 					locked={Boolean(editRecoveryLabel)}
 					recoveryLabel={editRecoveryLabel}
@@ -1021,19 +1011,16 @@ export function HumanMessage({
 					className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
 				>
 					<CollapsibleHumanBody stateKey={visibleMessageText}>
-						{excerptReferences.length > 0 ? (
-							<ChatAnnotationSummary
-								annotations={excerptReferences.map((excerpt) => ({
-									fileReference: excerpt.fileReference, id: excerpt.annotationId ?? excerpt.fileReference?.id, order: excerpt.annotationOrder ?? excerpt.fileReference?.order,
-									text: excerpt.text ?? "",
-									conversationId: excerpt.sourceConversationId,
-	 messageId: excerpt.sourceMessageId,
-									revision: excerpt.sourceRevision,
-								}))}
-								onSelect={onSelectAnnotation}
-								className="mb-2"
-							/>
-						) : null}
+						{annotationSummary}
+						{/* Attachments sit above the text they came with. */}
+						<StagedAttachmentItems
+							paths={attachments}
+							sessionId={sessionId}
+							apiBaseUrl={apiBaseUrl}
+							ariaLabel="Attached files"
+							className={cn((body || Boolean(message.cloudAttachments?.length)) && "mb-2")}
+						/>
+						<CloudMessageAttachments attachments={message.cloudAttachments} className={cn(body && "mb-2")} />
 						{body ? (
 							<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
 								<ProseWithInlineImages
@@ -1045,21 +1032,11 @@ export function HumanMessage({
 								/>
 							</p>
 						) : null}
-						<StagedAttachmentItems
-							paths={attachments}
-							sessionId={sessionId}
-							apiBaseUrl={apiBaseUrl}
-							ariaLabel="Attached files"
-							className={cn(body && "mt-2")}
-						/>
-						<CloudMessageAttachments attachments={message.cloudAttachments} className={cn((body || attachments.length > 0) && "mt-2")} />
 					</CollapsibleHumanBody>
 				</div>
 			)}
 			{editing ? null : (
-				// Hover-only actions float under the bubble instead of reserving a blank row;
-				// a branch navigator is always visible, so it keeps its place in the flow.
-				<div className={cn("flex h-7 items-center gap-1", branchPoint && onActivateBranch ? "mt-1" : "absolute right-0 top-full z-10")}>
+				<div className={actionRowClass}>
 					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
 						<MessageTimestamp createdAt={message.createdAt} />
 						{onEdit && onEditStart && message.turnId ? (
@@ -1226,7 +1203,12 @@ export function AssistantMessage({
 export function liveTaskLabel(activity: ConversationActivity): string {
 	if (activity.activityKind === "reasoning") return "Thinking";
 	if (activity.activityKind === "auto_review") return "Reviewing";
-	if (activity.activityKind === "mcp_tool") return activity.summary.trim() || "Using a tool";
+	if (activity.activityKind === "mcp_tool") {
+		const ao = aoToolView(activity);
+		if (ao) return ao.label;
+		const { tool } = mcpToolName(activity);
+		return tool.trim() || "Using a tool";
+	}
 	return splitSummary(activity).label;
 }
 
@@ -1800,7 +1782,7 @@ function TerminalInput({ text, truncated }: { text: string; truncated?: boolean 
 			</pre>
 			{truncated ? (
 				<p className="text-micro text-muted-foreground/70">
-					AO stopped recording keystrokes at its cap; more were sent.
+					Orchestrator stopped recording keystrokes at its cap; more were sent.
 				</p>
 			) : null}
 		</div>
@@ -1832,11 +1814,25 @@ function CommandOutput({
 }) {
 	const pre = useRef<HTMLPreElement>(null);
 	const detail = activity.detail;
+	const hostId = useContext(ChatHostId);
+	const sessionId = useChatSessionId();
+	// A remote page carries only the head and tail of a long output; outputBytes is its full size.
+	const cutBytes = typeof detail?.outputBytes === "number" ? detail.outputBytes : undefined;
+	const [whole, setWhole] = useState<{ revision: number; output?: string; loading?: boolean }>();
+	const wholeOutput = whole?.revision === activity.revision ? whole.output : undefined;
+	const showWhole = () => {
+		if (!sessionId) return;
+		const revision = activity.revision;
+		setWhole({ revision, loading: true });
+		fetchActivityOutput(sessionId, hostId, activity.sequence, activity.id)
+			.then((output) => setWhole({ revision, output }))
+			.catch(() => setWhole(undefined));
+	};
 	// Older ACP-backed conversations may contain the provider's structured
 	// rawOutput even though AO's view model promises a string. New events are
 	// normalized at the adapter boundary; this compatibility read keeps those
 	// already-durable rows from taking down the entire session surface.
-	const raw = commandOutputText(detail?.output as unknown);
+	const raw = commandOutputText((wholeOutput ?? detail?.output) as unknown);
 	// Memoized per row: the timeline re-renders once a second while a turn runs, and
 	// only the rows a reader has opened pay for this at all.
 	const output = useMemo(() => stripAnsi(raw), [raw]);
@@ -1878,9 +1874,19 @@ function CommandOutput({
 					Showing the end of this large output.
 				</p>
 			) : null}
+			{cutBytes !== undefined && wholeOutput === undefined && sessionId ? (
+				<button
+					type="button"
+					disabled={whole?.revision === activity.revision && whole.loading}
+					onClick={showWhole}
+					className="self-start px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
+				>
+					{whole?.revision === activity.revision && whole.loading ? "Loading the whole output…" : `Show the whole output (${Math.ceil(cutBytes / 1024)} KB)`}
+				</button>
+			) : null}
 			{detail?.outputTruncated ? (
 				<p className="text-xs leading-relaxed text-warning">
-					This command printed more than AO stores, so the output above stops early. Open a shell in
+					This command printed more than Orchestrator stores, so the output above stops early. Open a shell in
 					the worktree to see the rest.
 				</p>
 			) : null}
@@ -2113,7 +2119,7 @@ function Patch({ patch, truncated }: { patch: string; truncated?: boolean }) {
 			<ToolDiffCode text={patch} />
 			{truncated ? (
 				<p className="border-t border-border px-2.5 py-1.5 text-xs leading-relaxed text-warning">
-					This patch is longer than AO stores, so it stops early. The whole change is in the
+					This patch is longer than Orchestrator stores, so it stops early. The whole change is in the
 					worktree and in the turn&rsquo;s diff.
 				</p>
 			) : null}
@@ -2162,7 +2168,7 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
 				<ChatMarkdown text={text} streaming={streaming} muted />
 				{activity.detail?.textTruncated ? (
 					<p className="mt-1 text-micro text-muted-foreground/70">
-						This summary is longer than AO stores, so it stops early.
+						This summary is longer than Orchestrator stores, so it stops early.
 					</p>
 				) : null}
 			</div>
@@ -2184,15 +2190,21 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
  * and opens onto the arguments and the answer rather than onto terminal output.
  */
 function McpToolRow({ activity }: { activity: ConversationActivity }) {
+	const aoView = aoToolView(activity);
+	if (aoView) return aoView.hidden ? null : <AOToolRow view={aoView} />;
+	return <GenericMcpToolRow activity={activity} />;
+}
+
+function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 	const [open, setOpen] = useState(false);
 	const reducedMotion = useReducedMotion();
 	const detail = activity.detail;
-	const tool = detail?.toolName ?? activity.summary;
-	const server = detail?.server ?? detail?.namespace;
-	const sourceLabel = server ? `MCP · ${server}` : detail?.progress ? lastLine(detail.progress) : undefined;
+	const { tool, server } = mcpToolName(activity);
+	const args = mcpToolArguments(activity);
+	const sourceLabel = server ? `· ${server}` : detail?.progress ? lastLine(detail.progress) : undefined;
 	const failed = activity.status === "failed" || detail?.success === false || Boolean(detail?.error);
 	const hasBody = Boolean(
-			detail?.arguments !== undefined ||
+			args !== undefined ||
 			detail?.result !== undefined ||
 			detail?.content !== undefined ||
 			detail?.error ||
@@ -2259,9 +2271,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 							{detail.error}
 						</p>
 					) : null}
-					{detail?.arguments !== undefined ? (
-						<JsonPayload label="Arguments" value={detail.arguments} />
-					) : null}
+					{args !== undefined ? <JsonPayload label="Arguments" value={args} /> : null}
 					{detail?.result !== undefined ? (
 						<JsonPayload label="Result" value={detail.result} />
 					) : null}
@@ -2276,6 +2286,86 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 							</pre>
 						</div>
 					) : null}
+						</div>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+		</div>
+	);
+}
+
+/**
+ * A call to one of AO's own tools, told in the user's words: what was done, and
+ * what went wrong when something did. The tool's answer is written for the agent,
+ * so it is never shown as is.
+ */
+function AOToolRow({ view }: { view: AOToolView }) {
+	const [open, setOpen] = useState(false);
+	const reducedMotion = useReducedMotion();
+	const failed = view.state === "failed";
+	const hasBody = Boolean((failed && view.error) || view.lines?.length || view.text);
+
+	return (
+		<div className="min-w-0 max-w-full">
+			<Pressable
+				onClick={() => setOpen((prev) => !prev)}
+				disabled={!hasBody}
+				aria-expanded={hasBody ? open : undefined}
+				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-row-toggle", !hasBody && "cursor-default")}
+			>
+				<strong
+					className={cn(
+						"activity-row-label min-w-0 truncate text-xs font-normal",
+						failed ? "text-destructive" : "text-muted-foreground",
+					)}
+					title={view.label}
+				>
+					<span>{view.label}</span>
+				</strong>
+				{view.note ? (
+					<span className="min-w-0 flex-1 truncate text-xs text-warning">{view.note}</span>
+				) : null}
+				{view.state === "running" ? (
+					<Loader2 aria-label="running" className="size-3 shrink-0 animate-spin text-muted-foreground/60" />
+				) : hasBody ? (
+					<ChevronRight
+						aria-hidden="true"
+						className={cn("size-3 shrink-0 text-muted-foreground/40 transition-transform", open && "rotate-90")}
+					/>
+				) : null}
+			</Pressable>
+
+			<AnimatePresence initial={false}>
+				{open && hasBody ? (
+					<motion.div
+						initial={{ height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+						className="overflow-hidden"
+					>
+						<div className="flex flex-col gap-1 pb-2.5">
+							{failed && view.error ? (
+								<p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-destructive">
+									{view.error}
+								</p>
+							) : null}
+							{view.lines?.map((line, index) => (
+								<p
+									key={`${index}:${line.text}`}
+									className={cn(
+										"whitespace-pre-wrap break-words text-xs leading-relaxed",
+										line.tone === "error" ? "text-destructive" : "text-muted-foreground",
+									)}
+								>
+									{line.text}
+								</p>
+							))}
+							{view.text ? (
+								<pre className="scrollbar-none max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-caption leading-relaxed text-muted-foreground">
+									{view.text}
+								</pre>
+							) : null}
 						</div>
 					</motion.div>
 				) : null}
@@ -2404,7 +2494,7 @@ function truncationNote(value: unknown): string | undefined {
 	const record = value as { truncated?: unknown; bytes?: unknown; note?: unknown };
 	if (record.truncated !== true) return undefined;
 	const bytes = typeof record.bytes === "number" ? ` (${formatBytes(record.bytes)})` : "";
-	return `This payload${bytes} was larger than AO stores, so it was not kept.`;
+	return `This payload${bytes} was larger than Orchestrator stores, so it was not kept.`;
 }
 
 function formatBytes(bytes: number): string {
@@ -3185,7 +3275,7 @@ export function ApprovalCard({
 					))}
 					{decisions.length === 0 ? (
 						<p className="text-xs text-warning">
-							The agent offered no decisions AO can present. Open diagnostics.
+							The agent offered no decisions Orchestrator can present. Open diagnostics.
 						</p>
 					) : null}
 				</div>
@@ -3505,7 +3595,7 @@ export function TurnChangedFiles({
 
 			{diff.truncated ? (
 				<p className="px-3 pb-2 text-xs leading-relaxed text-warning">
-					This turn changed more files than AO lists here.
+					This turn changed more files than Orchestrator lists here.
 					{onReview ? " Use Review for the whole change." : " Open the Files tab for the whole change."}
 				</p>
 			) : null}

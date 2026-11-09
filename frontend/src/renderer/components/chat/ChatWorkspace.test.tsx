@@ -891,7 +891,7 @@ describe("ChatWorkspace timeline", () => {
 		const actionRegion = screen.getByTestId("session-action-region");
 		expect(actionRegion).toHaveClass("session-topbar-actions");
 		expect(actionRegion).not.toHaveClass("px-3");
-		expect(screen.getByRole("tab", { name: "Orchestrator · Codex · Working" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Orchestrator agent · Codex · Working" })).toBeInTheDocument();
 
 		view.rerender(
 			<ChatWorkspace
@@ -899,7 +899,7 @@ describe("ChatWorkspace timeline", () => {
 				session={{ ...chatSession, id: "legacy-orchestrator", kind: undefined }}
 			/>,
 		);
-		expect(screen.getByRole("tab", { name: "Orchestrator · Codex · Working" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Orchestrator agent · Codex · Working" })).toBeInTheDocument();
 	});
 
 	it("shows live provider context usage beside the composer settings", () => {
@@ -959,7 +959,7 @@ describe("ChatWorkspace timeline", () => {
 			/>,
 		);
 
-		const tab = screen.getByRole("tab", { name: "Orchestrator · Codex · Working" });
+		const tab = screen.getByRole("tab", { name: "Orchestrator agent · Codex · Working" });
 		await user.dblClick(tab);
 		fireEvent.contextMenu(tab);
 
@@ -1665,7 +1665,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(dock.getAllByText("Which direction should we take?").length).toBeGreaterThan(0);
 		expect(dock.getByText("Use the native protocol")).toBeVisible();
 		expect(dock.getByText("Keep the bridge")).toBeVisible();
-		expect(screen.queryByText("The agent offered no decisions AO can present")).not.toBeInTheDocument();
+		expect(screen.queryByText("The agent offered no decisions Orchestrator can present")).not.toBeInTheDocument();
 		expect(screen.queryByText("Do you want to run this command?")).not.toBeInTheDocument();
 		await user.click(dock.getByRole("radio", { name: /Native/ }));
 		await user.click(dock.getByRole("button", { name: "Continue" }));
@@ -2182,6 +2182,61 @@ describe("ChatWorkspace timeline", () => {
 		expect(openShell).toHaveBeenCalledOnce();
 	});
 
+	it("offers Restore, not Resume, on a terminated session", async () => {
+		const user = userEvent.setup();
+		const restore = vi.fn();
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{ ...chatSession, isTerminated: true }}
+				onResumeAgent={restore}
+				onOpenShell={vi.fn()}
+			/>,
+		);
+
+		// Archiving is a normal end, not a failure.
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.getByText("Session terminated")).toBeInTheDocument();
+		expect(screen.getByText("History is kept. Restore the session to continue.")).toBeInTheDocument();
+		expect(screen.getByText("Restore the session to continue")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		// A shell here would open in the project root once the worktree is gone.
+		expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Restore session" }));
+		expect(restore).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the composer locked while a terminated session restores", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{ ...chatSession, isTerminated: true }}
+				onResumeAgent={vi.fn()}
+				resumingAgent
+			/>,
+		);
+
+		// The banner title and the composer placeholder both say so.
+		expect(screen.getAllByText("Restoring session")).toHaveLength(2);
+		expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+		// A message sent now would reach a session the daemon still calls terminated.
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
+	});
+
+	it("does not wait for a reconnect on a terminated session", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{ ...chatSession, isTerminated: true, statusReadiness: "checking" }}
+				onResumeAgent={vi.fn()}
+			/>,
+		);
+
+		expect(screen.queryByText("Reconnecting to the agent…")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Restore session" })).toBeInTheDocument();
+	});
+
 	it("shows a reconnect in progress while the daemon is still checking the session", () => {
 		const stopped = { ...chatFixtureSettled, controller: { state: "stopped" as const } };
 		const view = render(
@@ -2194,7 +2249,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-		expect(screen.getByText("AO restarted. History is kept.")).toBeInTheDocument();
+		expect(screen.getByText("Orchestrator restarted. History is kept.")).toBeInTheDocument();
 		// The banner title and the composer placeholder both say so.
 		expect(screen.getAllByText("Reconnecting to the agent…")).toHaveLength(2);
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
@@ -2301,6 +2356,24 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
 		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
+	});
+
+	// A worker started by `ao spawn` has no local echo or opening time in this
+	// renderer: the daemon's provisioning state and queued brief alone must read
+	// as starting, never as an empty chat whose controller stopped.
+	it("shows a CLI-spawned worker as starting from the daemon's state alone", () => {
+		render(
+			<ChatWorkspace
+				snapshot={startingSnapshot("queued")}
+				session={{ ...chatSession, provisionState: "provisioning", provisionSteps: startingSteps("running") }}
+				onResumeAgent={vi.fn()}
+			/>,
+		);
+		expect(screen.getByText("Fix clicking attachments")).toBeInTheDocument();
+		expect(screen.getByTestId("session-startup")).toBeInTheDocument();
+		expect(screen.queryByText("What do you want to work on?")).not.toBeInTheDocument();
+		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+		expect(screen.queryByText("The controller is not connected")).not.toBeInTheDocument();
 	});
 
 	it("localizes the startup composer queue hint", async () => {
@@ -2715,6 +2788,25 @@ describe("ChatWorkspace timeline", () => {
 			/>,
 		);
 		expect(document.querySelector("[data-composer-placement]")).toHaveAttribute("data-composer-placement", "center");
+	});
+
+	it("opens a chat whose history is still being read as one with messages, not as a new chat", () => {
+		const loaded = { ...chatFixtureEmpty, items: [humanMessage("hello")] };
+		const view = render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, lastUserMessageAt: undefined }} historyPending />);
+		expect(screen.queryByRole("heading", { name: "What do you want to work on?" })).not.toBeInTheDocument();
+		const placement = document.querySelector("[data-composer-placement]");
+		expect(placement).toHaveAttribute("data-composer-placement", "dock");
+		expect(placement).toHaveClass("justify-end");
+		expect(screen.getByText("Restoring your conversation")).toBeInTheDocument();
+		// Typing doesn't wait for the history.
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true");
+		// The history fades in when it arrives.
+		view.rerender(<ChatWorkspace snapshot={loaded} session={{ ...chatSession, lastUserMessageAt: undefined }} />);
+		expect(document.querySelector(".chat-transcript-reveal")).not.toBeNull();
+		view.unmount();
+		// Read and empty, it is a new chat after all.
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, lastUserMessageAt: undefined }} />);
+		expect(screen.getByRole("heading", { name: "What do you want to work on?" })).toBeInTheDocument();
 	});
 
 	it("keeps the composer quiet while leaving chat for the terminal", () => {
@@ -3637,7 +3729,7 @@ Requested visual changes:
 Reference screenshots:
 - .ao/attachments/browser.png
 
-Task: Address the feedback below according to its wording. Visual adjustments are already previewed in AO's shared browser and describe the intended result.
+Task: Address the feedback below according to its wording. Visual adjustments are already previewed in Orchestrator's shared browser and describe the intended result.
 </browser_annotations>`,
 		};
 
@@ -4478,6 +4570,25 @@ describe("ChatWorkspace message actions", () => {
 		expect(restored).toHaveValue("later edit revision");
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		await waitFor(() => expect(getChatDraftBoundary(snapshot.sessionId)).toBeUndefined());
+	});
+
+	it("draws a restored inline edit as a bubble when its message is not in the timeline", async () => {
+		const snapshot = idleSnapshot();
+		writeChatInlineEdit(snapshot.sessionId, {
+			turnId: "turn-not-in-timeline",
+			text: "restored edit",
+			content: [],
+		});
+
+		render(<ChatWorkspace snapshot={snapshot} onEditMessage={vi.fn(async () => undefined)} />);
+		const restored = await screen.findByRole("textbox", { name: "Edit message" });
+		const bubble = restored.closest(".cursor-chat-human-message");
+		expect(bubble).not.toBeNull();
+		// Cancel and Send sit on their own row under the bubble.
+		const send = screen.getByRole("button", { name: "Send edited message" });
+		expect(bubble).not.toContainElement(send);
+		expect(bubble!.parentElement).toHaveClass("flex-col");
+		expect(bubble!.parentElement).toContainElement(send);
 	});
 
 	it("does not expose an accepted inline edit when a hidden replacement committed a later revision", async () => {
