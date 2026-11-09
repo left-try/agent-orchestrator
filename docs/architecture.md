@@ -79,6 +79,15 @@ Display status like `working`, `needs_input`, `ci_failed`, `mergeable` are **com
 
 The daemon starts with Chat hibernation disabled; the desktop synchronizes its Developer Mode toggle when the daemon becomes ready. TUI sessions keep their runtime lifecycle. The Chat view renews its lease every 10 seconds; an abandoned lease expires after 30 seconds. A renewal only extends the lease: after a failed wake, reopening the view, sending work, or using the visible retry action can attempt native resume again. Hibernation records a process boundary, not a display status: the session's derived board status continues to use activity and PR facts.
 
+Reviewer Chat providers are also eligible for idle shutdown, independently of
+the Developer Mode setting. After at least 90 seconds without conversation
+changes, AO stops a reviewer only if its latest turn is settled, no review run,
+queued turn, pending interaction, provider operation, or background work is
+active, and the provider supports resume. A message or model/settings request
+restarts the same reviewer conversation. A daemon restart recovers reviewer
+controllers normally and the idle sweep can release them again. Terminal-mode
+reviewers are not affected.
+
 ---
 
 ## System overview

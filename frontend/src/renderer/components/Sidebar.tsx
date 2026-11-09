@@ -66,6 +66,7 @@ import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { UpdateStatus } from "../../main/update-settings";
 import { artifactCount, groupArtifactsByProject } from "../lib/artifacts";
+import { filterSessionsByFolder } from "../lib/workspace-folder";
 import { parseNightlyVersion } from "../lib/build-channel";
 import {
 	hasConfiguredOrchestratorAgent,
@@ -120,6 +121,7 @@ import {
 } from "./ui/context-menu";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
 import { SessionPreviewCardAdapter } from "./SessionsBoardAdapters";
+import { WorkspaceFolderMarker } from "./WorkspaceFolderMarker";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -1623,6 +1625,11 @@ const ProjectItem = memo(function ProjectItem({
 		},
 		[newSidebarDesign, sessionOrder, visibleSessions],
 	);
+	const [folderFilter, setFolderFilter] = useState("all");
+	const folderSessions = useMemo(
+		() => filterSessionsByFolder(sessions, folderFilter, workspace.workspaceRepos ?? []),
+		[folderFilter, sessions, workspace.workspaceRepos],
+	);
 	// Publish the order shown here so keyboard navigation follows it.
 	useEffect(() => {
 		const sessionIds = sessions.map((session) => session.id);
@@ -1634,7 +1641,7 @@ const ProjectItem = memo(function ProjectItem({
 		hiddenCount: hiddenSessionCount,
 		showAll: showAllSessions,
 		toggleShowAll: toggleShowAllSessions,
-	} = useShowMoreCap(sessions, SIDEBAR_PROJECT_SESSION_LIMIT, selection.activeSessionId);
+	} = useShowMoreCap(folderSessions, SIDEBAR_PROJECT_SESSION_LIMIT, selection.activeSessionId);
 	useLayoutEffect(() => {
 		const header = projectHeaderRef.current;
 		const content = projectSessionsRef.current;
@@ -2147,6 +2154,14 @@ const ProjectItem = memo(function ProjectItem({
 						exit={{ y: -12, opacity: 0 }}
 						transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }}
 					>
+						{workspace.workspaceRepos?.length ? <label className="flex items-center gap-2 px-4 pt-1 text-2xs text-muted-foreground">
+							<span>{t("shell.folderFilter", { defaultValue: "Folder" })}</span>
+							<select aria-label={t("shell.folderFilter", { defaultValue: "Folder" })} className="h-6 min-w-0 flex-1 rounded border border-sidebar-border bg-sidebar px-1.5 text-sidebar-foreground" value={folderFilter} onChange={(event) => setFolderFilter(event.target.value)}>
+								<option value="all">{t("shell.allFolders", { defaultValue: "All folders" })}</option>
+								<option value="__workspace_wide__">{t("shell.workspaceWide", { defaultValue: "Workspace-wide" })}</option>
+								{workspace.workspaceRepos.map((repo) => <option key={repo.relativePath} value={repo.relativePath}>{repo.name}</option>)}
+							</select>
+						</label> : null}
 											<SessionReorderList
 										dndId={sessionDndId(projectKey)}
 										testId={`session-list-${projectKey}`}
@@ -2155,6 +2170,7 @@ const ProjectItem = memo(function ProjectItem({
 													hiddenSessionCount > 0 ? "pb-px" : "pb-1",
 												)}
 												sessions={listedSessions}
+											repos={workspace.workspaceRepos ?? []}
 												sessionIds={listedSessionIds}
 												activeSessionId={selection.activeSessionId}
 												plain={projectDragInProgress}
@@ -2460,6 +2476,7 @@ const PinnedSessionRow = memo(function PinnedSessionRow({
 // plain SessionRows instead: that list is ordered by pin time, not by hand.
 const SortableSessionRow = memo(function SortableSessionRow({
 	session,
+	repos = [],
 	active,
 	consumeDragClick,
 	indented = true,
@@ -2470,6 +2487,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	onOpen,
 }: {
 	session: WorkspaceSession;
+	repos?: WorkspaceSummary["workspaceRepos"];
 	active: boolean;
 	consumeDragClick: (id: string) => boolean;
 	indented?: boolean;
@@ -2494,6 +2512,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	return (
 		<SessionRow
 			session={session}
+			repos={repos}
 			active={active}
 			indented={indented}
 			onKilled={onKilled}
@@ -2513,6 +2532,7 @@ function SessionReorderList({
 	testId,
 	className,
 	sessions,
+	repos = [],
 	sessionIds,
 	activeSessionId,
 	indented = true,
@@ -2525,6 +2545,7 @@ function SessionReorderList({
 	testId: string;
 	className: string;
 	sessions: WorkspaceSession[];
+	repos?: WorkspaceSummary["workspaceRepos"];
 	sessionIds: string[];
 	activeSessionId?: string;
 	indented?: boolean;
@@ -2584,6 +2605,7 @@ function SessionReorderList({
 					<SessionRow
 						key={session.id}
 						session={session}
+						repos={repos}
 						active={activeSessionId === session.id}
 						indented={indented}
 						onKilled={onKilled}
@@ -2610,6 +2632,7 @@ function SessionReorderList({
 						<SortableSessionRow
 							key={session.id}
 							session={session}
+						repos={repos}
 							active={activeSessionId === session.id}
 							consumeDragClick={dragClickGuard.consumeClick}
 							indented={indented}
@@ -2635,6 +2658,7 @@ type SessionReorder = Pick<SortableRow, "isDragging" | "listeners" | "setActivat
 // Escape cancels) that persists through the daemon rename endpoint.
 const SessionRow = memo(function SessionRow({
 	session,
+	repos = [],
 	active,
 	hostLabel,
 	indented = true,
@@ -2645,6 +2669,7 @@ const SessionRow = memo(function SessionRow({
 	reorder,
 }: {
 	session: WorkspaceSession;
+	repos?: WorkspaceSummary["workspaceRepos"];
 	active: boolean;
 	hostLabel?: string;
 	indented?: boolean;
@@ -2876,6 +2901,7 @@ const SessionRow = memo(function SessionRow({
 									{session.title}
 								</span>
 								{hostLabel ? <Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs"><span className="truncate">{hostLabel}</span></Badge> : null}
+								<WorkspaceFolderMarker session={session} repos={repos ?? []} />
 							</span>
 						</Pressable>
 					</div>

@@ -378,10 +378,17 @@ func TestAppMemoryOwnExcludesSessionsUnderTheDaemon(t *testing.T) {
 }
 
 // reviewerHandleStore fakes the review store's live-handle listing.
-type reviewerHandleStore struct{ handles []domain.ReviewerHandle }
+type reviewerHandleStore struct {
+	handles []domain.ReviewerHandle
+	reviews []domain.Review
+}
 
 func (s reviewerHandleStore) ListLiveReviewerHandles(context.Context) ([]domain.ReviewerHandle, error) {
 	return s.handles, nil
+}
+
+func (s reviewerHandleStore) ListRecoverableChatReviews(context.Context) ([]domain.Review, error) {
+	return s.reviews, nil
 }
 
 // TestAppMemoryIncludesDetachedReviewerRoot covers issue #5948: a reviewer
@@ -487,5 +494,58 @@ func TestSystemMemoryCoalescesConcurrentReads(t *testing.T) {
 	}
 	if got := reads.Load(); got != 1 {
 		t.Fatalf("host read %d times for %d concurrent callers; want one shared read", got, callers)
+	}
+}
+
+func TestAppMemoryAttributesChatReviewerProcessTree(t *testing.T) {
+	reader := NewMemoryReader(MemoryReaderDeps{
+		Store: memStore{}, Runtime: memRuntime{},
+		Reviewers: reviewerHandleStore{reviews: []domain.Review{{ID: "rv-chat", SessionID: "s-a", Harness: domain.ReviewerCodex}}},
+		ChatHostPID: func(id domain.SessionID) (int, bool) {
+			if id == "review-rv-chat" {
+				return 200, true
+			}
+			return 0, false
+		},
+		AppRootPIDs: func() []int { return []int{100} },
+		Snapshot: func(context.Context) (*procmem.Table, error) {
+			return procmem.Parse("100 1 100 daemon\n200 100 200 host\n300 200 300 codex\n")
+		},
+		Now: time.Now,
+	})
+	app, err := reader.AppMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(app.Reviewers) != 1 || app.Reviewers[0].ReviewID != "rv-chat" || app.Reviewers[0].Memory.RSSBytes != 500*1024 || app.Own.RSSBytes != 100*1024 {
+		t.Fatalf("incorrect reviewer attribution: %+v", app)
+	}
+}
+
+func TestAppMemoryFindsDetachedChatReviewerAndSkipsMissingHost(t *testing.T) {
+	reader := NewMemoryReader(MemoryReaderDeps{
+		Store: memStore{}, Runtime: memRuntime{},
+		Reviewers: reviewerHandleStore{reviews: []domain.Review{
+			{ID: "live", SessionID: "worker", Harness: domain.ReviewerCodex},
+			{ID: "missing", SessionID: "worker", Harness: domain.ReviewerCodex},
+		}},
+		ChatHostPID: func(id domain.SessionID) (int, bool) {
+			if id == "review-live" {
+				return 200, true
+			}
+			return 0, false
+		},
+		AppRootPIDs: func() []int { return []int{100} },
+		Snapshot: func(context.Context) (*procmem.Table, error) {
+			return procmem.Parse("100 1 100 daemon\n200 1 200 host\n300 200 300 codex\n400 300 400 node\n")
+		},
+		Now: time.Now,
+	})
+	app, err := reader.AppMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(app.Reviewers) != 1 || app.Reviewers[0].ReviewID != "live" || app.Reviewers[0].Memory.RSSBytes != 900*1024 || app.Own.RSSBytes != 100*1024 || app.RSSBytes != 1000*1024 {
+		t.Fatalf("detached reviewer attribution = %+v", app)
 	}
 }

@@ -113,6 +113,7 @@ type Service struct {
 	controllers      map[domain.SessionID]*Controller
 	ownerControllers map[domain.ConversationOwner]*Controller
 	startConfigs     map[domain.ConversationOwner]StartConfig
+	sleepingReviews  map[domain.ConversationOwner]bool
 	awakeInterrupted map[domain.ConversationOwner]domain.AwakeAgentTarget
 	// handoffInterrupted is the provider turn each session's pending handoff
 	// stopped, kept until the account move that stopped it commits.
@@ -243,6 +244,7 @@ func New(opts Options) *Service {
 		handoffInterrupted:     make(map[domain.SessionID]string),
 		ownerControllers:       make(map[domain.ConversationOwner]*Controller),
 		startConfigs:           make(map[domain.ConversationOwner]StartConfig),
+		sleepingReviews:        make(map[domain.ConversationOwner]bool),
 		awakeInterrupted:       make(map[domain.ConversationOwner]domain.AwakeAgentTarget),
 		gates:                  make(map[domain.ConversationOwner]controllerGate),
 		probed:                 make(map[domain.AgentHarness]ports.ChatCapabilities),
@@ -1233,6 +1235,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	cfg.AwakeReconnectTarget = nil
 	cfg.HistoryMode = ports.ChatHistoryImport
 	s.startConfigs[owner] = cloneStartConfig(cfg)
+	delete(s.sleepingReviews, owner)
 	delete(s.awakeInterrupted, owner)
 	controller.start()
 	s.mu.Unlock()
@@ -1455,6 +1458,16 @@ func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwn
 	for _, block := range msg.Content {
 		if block.Type == "file_reference" {
 			return domain.ConversationTurn{}, fmt.Errorf("%w: file annotations require the main chat", ErrExcerptInvalid)
+		}
+	}
+	if owner.Kind == domain.ConversationOwnerReview {
+		gate := s.controllerGate(owner)
+		if err := gate.lock(ctx); err != nil {
+			return domain.ConversationTurn{}, err
+		}
+		defer gate.unlock()
+		if err := s.wakeReviewerLocked(ctx, owner); err != nil {
+			return domain.ConversationTurn{}, err
 		}
 	}
 	controller, err := s.ControllerForOwner(owner)
@@ -1807,6 +1820,9 @@ func (s *Service) StopForOwner(ctx context.Context, owner domain.ConversationOwn
 		return err
 	}
 	defer gate.unlock()
+	s.mu.Lock()
+	delete(s.sleepingReviews, owner)
+	s.mu.Unlock()
 
 	controller, err := s.ControllerForOwner(owner)
 	if errors.Is(err, ErrNoController) {
@@ -2138,6 +2154,11 @@ func (s *Service) snapshotForReviewRows(review domain.Review, rows ConversationR
 		state, caps = controller.State(), controller.Capabilities()
 		dispatching = controller.DispatchingTurnIDs()
 	}
+	s.mu.RLock()
+	if s.sleepingReviews[domain.ReviewConversationOwner(review.ID)] {
+		state = ports.ChatControllerHibernated
+	}
+	s.mu.RUnlock()
 	return Snapshot{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, EditFloorSequence: rows.EditFloorSequence, NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence, SessionID: review.SessionID, Harness: domain.AgentHarness(review.Harness), Mode: domain.SessionModeChat, Controller: state, Turns: withDispatchingTurnRunning(rows.Turns, dispatching...), Messages: rows.Messages, Activities: rows.Activities, BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage, OldestSequence: rows.OldestSequence, HasMoreBefore: rows.HasMoreBefore, Capabilities: caps, Usage: rows.Conversation.Usage, RateLimits: rows.Conversation.RateLimits}
 }
 
@@ -2546,6 +2567,16 @@ func (s *Service) Models(ctx context.Context, id domain.SessionID) ([]ports.Chat
 
 // ModelsForOwner reads the catalog from the owner-specific provider.
 func (s *Service) ModelsForOwner(ctx context.Context, owner domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error) {
+	if owner.Kind == domain.ConversationOwnerReview {
+		gate := s.controllerGate(owner)
+		if err := gate.lock(ctx); err != nil {
+			return nil, domain.ConversationSettings{}, err
+		}
+		defer gate.unlock()
+		if err := s.wakeReviewerLocked(ctx, owner); err != nil {
+			return nil, domain.ConversationSettings{}, err
+		}
+	}
 	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
 		return nil, domain.ConversationSettings{}, err
@@ -2800,6 +2831,16 @@ var ErrReviewerPermissionsFixed = errors.New("reviewer approval permissions are 
 
 // SetTurnSettingsForOwner records choices without changing another owner's settings.
 func (s *Service) SetTurnSettingsForOwner(ctx context.Context, owner domain.ConversationOwner, settings domain.ConversationSettings) (domain.ConversationSettings, error) {
+	if owner.Kind == domain.ConversationOwnerReview {
+		gate := s.controllerGate(owner)
+		if err := gate.lock(ctx); err != nil {
+			return domain.ConversationSettings{}, err
+		}
+		defer gate.unlock()
+		if err := s.wakeReviewerLocked(ctx, owner); err != nil {
+			return domain.ConversationSettings{}, err
+		}
+	}
 	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
 		return domain.ConversationSettings{}, err
