@@ -1,9 +1,10 @@
-import { Box, Code2, Folder, Heart, Rocket, Star, type LucideIcon } from "lucide-react";
+import { Blocks, BookOpen, Bot, Box, BriefcaseBusiness, Cloud, Code2, Coffee, Database, Flame, Folder, Gamepad2, Globe, Heart, Image as ImageIcon, Laptop, Layers, Leaf, Lightbulb, Music, Palette, Rocket, Server, Shield, Sparkles, Star, Terminal, Wrench, Zap, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 
-const icons = { folder: Folder, code: Code2, box: Box, rocket: Rocket, star: Star, heart: Heart } satisfies Record<string, LucideIcon>;
+const icons = { folder: Folder, code: Code2, box: Box, rocket: Rocket, star: Star, heart: Heart, blocks: Blocks, book: BookOpen, bot: Bot, briefcase: BriefcaseBusiness, cloud: Cloud, coffee: Coffee, database: Database, flame: Flame, game: Gamepad2, globe: Globe, image: ImageIcon, laptop: Laptop, layers: Layers, leaf: Leaf, idea: Lightbulb, music: Music, palette: Palette, server: Server, shield: Shield, sparkles: Sparkles, terminal: Terminal, tools: Wrench, lightning: Zap } satisfies Record<string, LucideIcon>;
 const colors = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899"];
 const key = "ao.projectIconOverrides";
 export type ProjectIconChoice = { type: "image"; src: string } | { type: "symbol"; icon: keyof typeof icons; color: string };
@@ -60,18 +61,18 @@ export function ProjectIconDialog({ open, onOpenChange, projectName, value, onSa
   };
   reader.readAsDataURL(file);
  };
- return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.stopPropagation()}>
+ return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-h-[min(90vh,760px)] overflow-y-auto rounded-2xl p-5 sm:rounded-2xl" onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.stopPropagation()}>
   <DialogTitle>Customize project icon</DialogTitle>
   <DialogDescription>Choose an icon for {projectName}. This setting is saved on this device.</DialogDescription>
-  <div className="space-y-4 text-sm">
-   <button type="button" className="rounded border px-3 py-2 hover:bg-accent" onClick={() => { setChoice(undefined); setError(""); }}>Use repository icon (default)</button>
-   <div><p className="mb-2 font-medium">Icon</p><div className="flex flex-wrap gap-2">{Object.entries(icons).map(([name, Icon]) => <button key={name} type="button" aria-label={name} aria-pressed={choice?.type === "symbol" && choice.icon === name} className="rounded border p-2 aria-pressed:ring-2" onClick={() => setChoice({ ...symbol, icon: name as keyof typeof icons })}><Icon className="size-5" style={{ color: symbol.color }} /></button>)}</div></div>
-   <div><p className="mb-2 font-medium">Color</p><div className="flex flex-wrap gap-2">{colors.map((color) => <button key={color} type="button" aria-label={`Color ${color}`} aria-pressed={choice?.type === "symbol" && choice.color === color} className="size-7 rounded-full border aria-pressed:ring-2 aria-pressed:ring-offset-2" style={{ backgroundColor: color }} onClick={() => setChoice({ ...symbol, color })} />)}</div></div>
-   <div className="space-y-2"><label className="block font-medium" htmlFor={`icon-url-${projectId}`}>Image URL (HTTPS)</label><div className="flex gap-2"><input id={`icon-url-${projectId}`} className="min-w-0 flex-1 rounded border bg-transparent px-2 py-1" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/icon.png" /><Button type="button" variant="outline" onClick={() => { try { const parsed = new URL(url); if (parsed.protocol !== "https:") throw new Error(); setChoice({ type: "image", src: parsed.href }); setError(""); } catch { setError("Enter a valid HTTPS image URL."); } }}>Use URL</Button></div></div>
-   <label className="block font-medium">Upload PNG <input type="file" accept="image/png" className="mt-2 block w-full text-sm" onChange={(e) => upload(e.target.files?.[0])} /></label>
-   <div className="flex items-center gap-2">Preview: {choice ? <CustomProjectIcon choice={choice} className="size-8 rounded object-cover" /> : <span className="text-muted-foreground">Repository icon</span>}</div>
+  <div className="space-y-5 text-sm">
+   <Button type="button" variant="secondary" className="rounded-xl" onClick={() => { setChoice(undefined); setError(""); }}>Use repository icon (default)</Button>
+   <div><p className="mb-2 font-medium">Icon</p><div className="grid grid-cols-7 gap-1 sm:grid-cols-10">{Object.entries(icons).map(([name, Icon]) => <button key={name} type="button" aria-label={name} aria-pressed={choice?.type === "symbol" && choice.icon === name} title={name} className="flex size-9 items-center justify-center rounded-xl transition-colors hover:bg-interactive-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary aria-pressed:bg-interactive-active" onClick={() => setChoice({ ...symbol, icon: name as keyof typeof icons })}><Icon className="size-5" style={{ color: symbol.color }} /></button>)}</div></div>
+   <div><p className="mb-2 font-medium">Color</p><div className="flex flex-wrap gap-2">{colors.map((color) => <button key={color} type="button" aria-label={`Color ${color}`} aria-pressed={choice?.type === "symbol" && choice.color === color} className="size-7 rounded-full transition-transform hover:scale-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary aria-pressed:ring-2 aria-pressed:ring-foreground aria-pressed:ring-offset-2 aria-pressed:ring-offset-overlay" style={{ backgroundColor: color }} onClick={() => setChoice({ ...symbol, color })} />)}</div></div>
+   <div className="space-y-2"><label className="block font-medium" htmlFor={`icon-url-${projectId}`}>Image URL (HTTPS)</label><div className="flex gap-2"><Input id={`icon-url-${projectId}`} className="min-w-0 flex-1 rounded-xl" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/icon.png" /><Button type="button" variant="secondary" className="rounded-xl" onClick={() => { try { const parsed = new URL(url); if (parsed.protocol !== "https:") throw new Error(); setChoice({ type: "image", src: parsed.href }); setError(""); } catch { setError("Enter a valid HTTPS image URL."); } }}>Use URL</Button></div></div>
+   <label className="block font-medium">Upload PNG <input type="file" accept="image/png" className="mt-2 block w-full text-xs text-muted-foreground file:mr-3 file:cursor-pointer file:rounded-xl file:border-0 file:bg-secondary file:px-3 file:py-2 file:text-sm file:text-secondary-foreground hover:file:bg-interactive-hover" onChange={(e) => upload(e.target.files?.[0])} /></label>
+   <div className="flex items-center gap-3 text-muted-foreground">Preview: {choice ? <CustomProjectIcon choice={choice} className="size-8 rounded object-cover" /> : <span className="text-muted-foreground">Repository icon</span>}</div>
    {error && <p role="alert" className="text-destructive">{error}</p>}
-   <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button onClick={() => save(choice)}>Save</Button></div>
+   <div className="flex justify-end gap-2"><Button variant="footer" onClick={() => onOpenChange(false)}>Cancel</Button><Button variant="footer-primary" onClick={() => save(choice)}>Save</Button></div>
   </div>
  </DialogContent></Dialog>;
 }
