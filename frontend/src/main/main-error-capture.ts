@@ -17,7 +17,7 @@ export const MAIN_ERROR_REASONS = [
 	// ipc
 	"handler",
 	// window
-	"unresponsive", "did_fail_load",
+	"unresponsive", "did_fail_load", "renderer_gone",
 	// acp_runtime
 	"rebuild",
 	"recovery",

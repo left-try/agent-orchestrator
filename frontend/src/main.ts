@@ -241,6 +241,7 @@ import type {
 } from "./main/browser-live-types";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { planDaemonAutoRestart, daemonExitWasUngraceful } from "./main/daemon-auto-restart";
+import { createRendererRecovery } from "./main/renderer-recovery";
 import { readProcessStartMs } from "./main/process-start";
 import { claimFirstRunExperimentExposure, markFirstRunProjectPromptSeen, readFirstRunProjectPrompt, readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
@@ -1295,11 +1296,17 @@ async function createWindowInternal(): Promise<void> {
 		// Leaving the app (switching apps, hiding, minimizing) finishes dictation.
 		dictation.stop();
 	});
-	shellWebContents.on("render-process-gone", () => {
+	const recoverRenderer = createRendererRecovery(
+		() => { if (!shellWebContents.isDestroyed() && !browserQuitRequested) shellWebContents.reload(); },
+		(message) => console.error(message),
+	);
+	shellWebContents.on("render-process-gone", (_event, details) => {
 		keybindingRecordingActive = false;
 		terminalFocused = false;
 		terminalFontSizeFocused = false;
 		artifactZoomEngaged = false;
+		if (details.reason !== "clean-exit") captureMainError({ category: "window", reason: "renderer_gone", detail: `code:${details.exitCode}` });
+		recoverRenderer(details);
 	});
 	shellWebContents.on("did-start-loading", () => {
 		terminalFocused = false;
