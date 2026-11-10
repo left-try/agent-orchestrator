@@ -96,6 +96,7 @@ export function toWorkspaceSession(
 		terminalGeneration: session.terminalGeneration,
 		workspaceId: project.id,
 		workspaceName: project.name,
+		workspaceFolder: session.workspaceFolder || undefined,
 		title: session.displayName ?? session.issueId ?? session.id,
 		issueId: session.issueId,
 		provider: toAgentProvider(session.harness),
@@ -300,6 +301,7 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 			kind,
 			path: project.path,
 			folderMissing: project.folderMissing,
+			workspaceRepos: project.workspaceRepos ?? [],
 			orchestratorAgent: project.orchestratorAgent ? toAgentProvider(project.orchestratorAgent) : undefined,
 			sessions: sessions
 				.filter((session) => session.projectId === project.id)
@@ -360,6 +362,7 @@ function toRemoteWorkspaces(
 		kind: toProjectKind(project.kind),
 		path: project.path,
 		folderMissing: project.folderMissing,
+		workspaceRepos: project.workspaceRepos ?? [],
 		orchestratorAgent: project.orchestratorAgent ? toAgentProvider(project.orchestratorAgent) : undefined,
 		sessions: sessions.filter((session) => session.projectId === project.id).map((session) => ({
 			...toWorkspaceSession(session, project),

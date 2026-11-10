@@ -490,7 +490,8 @@ type WorkspaceTreeEntry struct {
 // fields are json:"-"; these curated fields are what serialize.
 type SessionView struct {
 	domain.Session
-	Branch string `json:"branch,omitempty"`
+	WorkspaceFolder string `json:"workspaceFolder,omitempty"`
+	Branch          string `json:"branch,omitempty"`
 	// TerminalGeneration is an opaque renderer fence. A restarted controller
 	// may deliberately reuse its terminal handle; clients must still discard the
 	// old attachment when this value changes.
@@ -1357,6 +1358,7 @@ type SendSessionMessageResponse struct {
 type DelegateTaskRequest struct {
 	ClientRequestID string              `json:"clientRequestId,omitempty" maxLength:"128"`
 	ProjectID       domain.ProjectID    `json:"projectId"`
+	WorkspaceFolder string              `json:"workspaceFolder,omitempty" maxLength:"512"`
 	Brief           string              `json:"brief" maxLength:"102400"`
 	Branch          string              `json:"branch,omitempty" maxLength:"255"`
 	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,fake"`

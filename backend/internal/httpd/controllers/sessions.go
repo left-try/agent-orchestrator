@@ -2331,6 +2331,7 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		ClientRequestID:   in.ClientRequestID,
 		ClientRequestHash: requestHash,
 		ProjectID:         in.ProjectID,
+		WorkspaceFolder:   strings.TrimSpace(in.WorkspaceFolder),
 		Brief:             domain.SanitizeControlChars(in.Brief),
 		Branch:            domain.SanitizeControlChars(strings.TrimSpace(in.Branch)),
 		RequestedAgent:    in.Agent,
@@ -2988,6 +2989,7 @@ func sessionView(r *http.Request, s domain.Session) SessionView {
 	terminalGeneration := s.Metadata.RuntimeLaunchID
 	view := SessionView{
 		Session:            s,
+		WorkspaceFolder:    s.Metadata.WorkspaceFolder,
 		Branch:             s.Metadata.Branch,
 		TerminalGeneration: terminalGeneration,
 		PreviewURL:         s.Metadata.PreviewURL,

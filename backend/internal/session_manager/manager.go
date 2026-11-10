@@ -1555,6 +1555,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		Branch:                    ws.Branch,
 		WorkspacePath:             ws.Path,
 		WorkspaceRepoPath:         ws.RepoPath,
+		WorkspaceFolder:           cfg.WorkspaceFolder,
 		RuntimeHandleID:           handle.ID,
 		RuntimeLaunchID:           launchID,
 		Prompt:                    prompt,

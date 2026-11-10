@@ -1991,6 +1991,7 @@ func TestMarkSpawnedStoresRuntimeMetadata(t *testing.T) {
 		Branch:            "b",
 		WorkspacePath:     "/ws",
 		WorkspaceRepoPath: "/repos/mer",
+		WorkspaceFolder:   "services/api",
 		RuntimeHandleID:   "h1",
 		AgentSessionID:    "agent",
 		Prompt:            "prompt",
@@ -2004,6 +2005,9 @@ func TestMarkSpawnedStoresRuntimeMetadata(t *testing.T) {
 	}
 	if got.Metadata.WorkspaceRepoPath != metadata.WorkspaceRepoPath {
 		t.Fatalf("workspace repo path = %q, want %q", got.Metadata.WorkspaceRepoPath, metadata.WorkspaceRepoPath)
+	}
+	if got.Metadata.WorkspaceFolder != metadata.WorkspaceFolder {
+		t.Fatalf("workspace folder = %q, want %q", got.Metadata.WorkspaceFolder, metadata.WorkspaceFolder)
 	}
 }
 

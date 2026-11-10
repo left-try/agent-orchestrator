@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
 	approvalModes: undefined as ApprovalMode[] | undefined,
 	modelWarning: undefined as string | undefined,
 	modelWarningRetries: true,
+	workspaceRepos: [] as { name: string; relativePath: string; repo: string }[],
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -34,7 +35,7 @@ vi.mock("./settings/MobileDevicesSection", () => ({ mobileDevicesQueryKey: ["mob
 vi.mock("./chat/ChatWorkspace", () => ({
 	ChatWorkspace: (props: ChatWorkspaceProps) => {
 		h.workspace = props;
-		return <>{props.draftNotice}</>;
+		return <>{h.workspaceRepos.length ? props.composerTray : null}{props.draftNotice}</>;
 	},
 }));
 vi.mock("./TaskComposer", () => ({
@@ -69,7 +70,7 @@ vi.mock("./TaskComposer", () => ({
 	}),
 }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
-	useWorkspaceQuery: () => ({ data: [{ id: "proj-1", name: "Project", kind: "project", sessions: [] }] }),
+	useWorkspaceQuery: () => ({ data: [{ id: "proj-1", name: "Project", kind: h.workspaceRepos.length ? "workspace" : "project", workspaceRepos: h.workspaceRepos, sessions: [] }] }),
 	useRemoteWorkspaces: () => ({ data: [] }),
 	workspaceQueryKeyForHost: () => ["workspaces"],
 }));
@@ -100,6 +101,7 @@ beforeEach(() => {
 	h.approvalModes = undefined;
 	h.modelWarning = undefined;
 	h.modelWarningRetries = true;
+	h.workspaceRepos = [];
 	window.localStorage.clear();
 });
 
@@ -121,6 +123,21 @@ describe("NewChatPage", () => {
 		renderPage();
 		expect(screen.getByRole("status").textContent).toContain("fix/login");
 		expect(screen.queryByRole("alert")).toBeNull();
+	});
+	it("sends an explicitly selected workspace folder with a new task", async () => {
+		h.workspaceRepos = [{ name: "api", relativePath: "services/api", repo: "acme/api" }];
+		h.launch.mockResolvedValue("sess-1");
+		renderPage();
+		const user = userEvent.setup();
+		await user.click(screen.getByRole("button", { name: "Folder" }));
+		await user.click(await screen.findByRole("menuitem", { name: "api" }));
+		await act(async () => {
+			await h.workspace?.onSend?.("Fix API validation", undefined, "folder-task");
+		});
+		expect(h.launch).toHaveBeenCalledWith("Fix API validation", expect.objectContaining({
+			clientRequestId: "folder-task",
+			workspaceFolder: "services/api",
+		}));
 	});
 	it("creates the session on first send and hands its brief to the session chat", async () => {
 		let resolve!: (sessionId: string) => void;

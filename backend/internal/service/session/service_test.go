@@ -76,6 +76,7 @@ type fakeStore struct {
 	repositoryRenames   []domain.RepositoryRename
 	projects            map[string]domain.ProjectRecord
 	worktrees           map[domain.SessionID][]domain.SessionWorktreeRecord
+	workspaceRepos      map[string][]domain.WorkspaceRepoRecord
 	checks              map[string][]domain.PullRequestCheck
 	reviews             map[string][]domain.PullRequestReview
 	reviewsErr          error
@@ -106,6 +107,7 @@ func newFakeStore() *fakeStore {
 		reportedPRURLs: map[domain.SessionID][]string{},
 		projects:       map[string]domain.ProjectRecord{},
 		worktrees:      map[domain.SessionID][]domain.SessionWorktreeRecord{},
+		workspaceRepos: map[string][]domain.WorkspaceRepoRecord{},
 		checks:         map[string][]domain.PullRequestCheck{},
 		reviews:        map[string][]domain.PullRequestReview{},
 		threads:        map[string][]domain.PullRequestReviewThread{},
@@ -114,8 +116,8 @@ func newFakeStore() *fakeStore {
 	}
 }
 
-func (f *fakeStore) ListWorkspaceRepos(context.Context, string) ([]domain.WorkspaceRepoRecord, error) {
-	return nil, nil
+func (f *fakeStore) ListWorkspaceRepos(_ context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error) {
+	return f.workspaceRepos[projectID], nil
 }
 
 func (f *fakeStore) ConversationForSession(_ context.Context, id domain.SessionID) (domain.ConversationRecord, error) {

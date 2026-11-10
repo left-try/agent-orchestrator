@@ -167,6 +167,77 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
+	it("filters workspace tasks by their explicit child folder and shows the folder marker", () => {
+		const assigned = boardSession({ id: "api-task", title: "Fix API", status: "working", workspaceFolder: "services/api" });
+		const wide = boardSession({ id: "wide-task", title: "Workspace-wide task", status: "working" });
+		const workspace = {
+			...workspaceWithSessions([assigned, wide]),
+			kind: "workspace" as const,
+			workspaceRepos: [{ name: "api", relativePath: "services/api", repo: "acme/api" }],
+		};
+		workspaceQueryMock.mockReturnValue({ data: [workspace], isSuccess: true });
+		renderBoard("p1");
+		expect(document.querySelector('[data-workspace-folder="services/api"]')).toBeInTheDocument();
+		const filter = screen.getByLabelText("Folder");
+		fireEvent.change(filter, { target: { value: "services/api" } });
+		expect(screen.getByText("Fix API")).toBeInTheDocument();
+		expect(screen.queryByText("Workspace-wide task")).not.toBeInTheDocument();
+		fireEvent.change(filter, { target: { value: "__workspace_wide__" } });
+		expect(screen.queryByText("Fix API")).not.toBeInTheDocument();
+		expect(screen.getByText("Workspace-wide task")).toBeInTheDocument();
+	});
+
+	it("keeps single-repo project tasks in the all-projects Workspace-wide filter", () => {
+		const assigned = boardSession({
+			id: "api-task",
+			title: "API folder task",
+			status: "working",
+			workspaceId: "workspace",
+			workspaceName: "Workspace",
+			workspaceFolder: "services/api",
+		});
+		const workspaceWide = boardSession({
+			id: "wide-task",
+			title: "Workspace-wide task",
+			status: "working",
+			workspaceId: "workspace",
+			workspaceName: "Workspace",
+		});
+		const singleRepoTask = boardSession({
+			id: "single-task",
+			title: "Single-repo task",
+			status: "working",
+			workspaceId: "single-repo",
+			workspaceName: "Single repo",
+		});
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				{
+					...workspaceWithSessions([assigned, workspaceWide]),
+					id: "workspace",
+					name: "Workspace",
+					kind: "workspace" as const,
+					workspaceRepos: [{ name: "api", relativePath: "services/api", repo: "acme/api" }],
+				},
+				{
+					id: "single-repo",
+					name: "Single repo",
+					path: "/tmp/single-repo",
+					kind: "single_repo" as const,
+					sessions: [singleRepoTask],
+				},
+			],
+			isSuccess: true,
+		});
+		renderBoard();
+
+		fireEvent.change(screen.getByLabelText("Folder"), { target: { value: "__workspace_wide__" } });
+
+		expect(screen.getByText("Workspace-wide task")).toBeInTheDocument();
+		expect(screen.getByText("Single-repo task")).toBeInTheDocument();
+		expect(screen.queryByText("API folder task")).not.toBeInTheDocument();
+	});
+
 	it("shows the Cloud loader instead of Chat while a cloud orchestrator is starting", () => {
 		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
 		useUiStore.getState().setProjectProvisioning("p1", true);

@@ -16504,6 +16504,8 @@ components:
           type: string
         workspaceCleanupReportOnly:
           type: boolean
+        workspaceFolder:
+          type: string
       required:
       - id
       - kind
@@ -17683,6 +17685,9 @@ components:
         projectId:
           type: string
         taskPreparation:
+          type: string
+        workspaceFolder:
+          maxLength: 512
           type: string
       required:
       - projectId
@@ -19429,6 +19434,10 @@ components:
           type: string
         sessionPrefix:
           type: string
+        workspaceRepos:
+          items:
+            $ref: '#/components/schemas/WorkspaceRepo'
+          type: array
       required:
       - id
       - name

@@ -80,6 +80,7 @@ const NO_MODELS: AgentModelOption[] = [];
 type CreateTaskInput = {
 	clientRequestId?: string;
 	projectId: string;
+	workspaceFolder?: string;
 	brief: string;
 	branch?: string;
 	agent?: DelegateAgent;
@@ -142,6 +143,7 @@ export type TaskComposerProps = {
 };
 
 export type TaskLaunchOptions = {
+	workspaceFolder?: string;
 	interfaceMode?: "chat" | "tui";
 	approvalMode?: ApprovalMode;
 	/** Idempotency key; a retry with the same key cannot create a second session. */
@@ -298,6 +300,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					body: {
 						clientRequestId: input.clientRequestId,
 						projectId: input.projectId,
+						...(input.workspaceFolder ? { workspaceFolder: input.workspaceFolder } : {}),
 						brief: input.brief,
 						...(input.branch ? { branch: input.branch } : {}),
 						agent: input.agent,
@@ -1055,7 +1058,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	};
 
 	// Rejects with the create error after recording it (and any fallback) here.
-	const launch = async (brief: string, { interfaceMode, approvalMode: requestedApproval, clientRequestId, replay, attachments: files }: TaskLaunchOptions = {}): Promise<string> => {
+	const launch = async (brief: string, { interfaceMode, approvalMode: requestedApproval, clientRequestId, replay, attachments: files, workspaceFolder }: TaskLaunchOptions = {}): Promise<string> => {
 		if (!projectId || !canSubmit || isSubmitting) throw new Error(remoteLoadError ?? t("newTask.unableToStart"));
 
 		setIsSubmitting(true);
@@ -1083,6 +1086,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			launchingPreparationRef.current = submittedPreparation;
 			const request: CreateTaskInput = {
 				projectId,
+				...(workspaceFolder ? { workspaceFolder } : {}),
 				brief,
 				...(branchOverride && !isCloudProject && !isStandalone ? { branch: branchOverride } : {}),
 				...(replay ? {
