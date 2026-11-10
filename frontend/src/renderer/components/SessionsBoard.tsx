@@ -188,7 +188,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			: folderFilter === "__workspace_wide__"
 				? activeSessions.filter((session) => {
 					const repos = all.find((candidate) => candidate.id === session.workspaceId)?.workspaceRepos ?? [];
-					return repos.length > 0 && workspaceFolderForSession(session, repos).id === "__workspace_wide__";
+					return repos.length === 0 || workspaceFolderForSession(session, repos).id === "__workspace_wide__";
 				})
 				: activeSessions.filter((session) => {
 					const option = globalFolderOptions.find((candidate) => candidate.value === folderFilter);
