@@ -13,9 +13,10 @@ describe("workspace folder attribution", () => {
 	});
 
 	it("uses the registered visible folder name and filters by its relative path", () => {
-		const session = { id: "s1", workspaceFolder: "services/api" };
+		const session = { workspaceFolder: "services/api" };
 		expect(workspaceFolderForSession(session, repos)).toEqual({ id: "services/api", label: "api" });
-		expect(filterSessionsByFolder([session, { id: "s2" }], "services/api", repos)).toEqual([session]);
+		const unassigned = {};
+		expect(filterSessionsByFolder([session, unassigned], "services/api", repos)).toEqual([session]);
 		expect(filterSessionsByFolder([session], "all", repos)).toEqual([session]);
 	});
 });

@@ -122,6 +122,8 @@ import {
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
 import { SessionPreviewCardAdapter } from "./SessionsBoardAdapters";
 import { WorkspaceFolderMarker } from "./WorkspaceFolderMarker";
+
+const EMPTY_WORKSPACE_REPOS: NonNullable<WorkspaceSummary["workspaceRepos"]> = [];
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -2170,7 +2172,7 @@ const ProjectItem = memo(function ProjectItem({
 													hiddenSessionCount > 0 ? "pb-px" : "pb-1",
 												)}
 												sessions={listedSessions}
-											repos={workspace.workspaceRepos ?? []}
+												repos={workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS}
 												sessionIds={listedSessionIds}
 												activeSessionId={selection.activeSessionId}
 												plain={projectDragInProgress}
@@ -2476,7 +2478,7 @@ const PinnedSessionRow = memo(function PinnedSessionRow({
 // plain SessionRows instead: that list is ordered by pin time, not by hand.
 const SortableSessionRow = memo(function SortableSessionRow({
 	session,
-	repos = [],
+	repos = EMPTY_WORKSPACE_REPOS,
 	active,
 	consumeDragClick,
 	indented = true,
@@ -2658,7 +2660,7 @@ type SessionReorder = Pick<SortableRow, "isDragging" | "listeners" | "setActivat
 // Escape cancels) that persists through the daemon rename endpoint.
 const SessionRow = memo(function SessionRow({
 	session,
-	repos = [],
+	repos = EMPTY_WORKSPACE_REPOS,
 	active,
 	hostLabel,
 	indented = true,

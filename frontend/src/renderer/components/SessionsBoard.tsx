@@ -59,7 +59,7 @@ import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useDiagnosticsEnabled, usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
 import { AppMemoryIndicator, toSessionFacts } from "./SessionMemoryPanel";
 import { Button } from "./ui/button";
-import { filterSessionsByFolder } from "../lib/workspace-folder";
+import { filterSessionsByFolder, workspaceFolderForSession } from "../lib/workspace-folder";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import {
 	ArchivedSessionCardAdapter,
@@ -93,6 +93,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const connected = useConnectedHosts().includes(hostId ?? "");
 	const scopeKey = refKey({ host: hostId ?? LOCAL_HOST, id: projectId ?? "all" });
 	const [folderFilter, setFolderFilter] = useState("all");
+	useEffect(() => setFolderFilter("all"), [scopeKey]);
 	// Lanes follow the daemon's delivery order: building -> validating ->
 	// in review -> ready. The middle two are one review-feedback loop, split by
 	// whose turn it is.
@@ -174,7 +175,25 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const participantsBySession = useSessionParticipants(activeSessions, !hostId);
 	const { userId: cloudUserId } = useCloudCp(!hostId && activeSessions.some((session) => Boolean(session.cloud)));
 	const folderRepos = workspace?.workspaceRepos ?? [];
-	const boardSessions = filterSessionsByFolder(activeSessions, folderFilter, folderRepos).map((session) =>
+	const globalFolderOptions = !projectId ? all.flatMap((candidate) => (candidate.workspaceRepos ?? []).map((repo) => ({
+		value: `${candidate.id}::${repo.relativePath}`,
+		label: `${candidate.name} / ${repo.name}`,
+		workspaceId: candidate.id,
+		relativePath: repo.relativePath,
+	}))) : [];
+	const boardSessions = (projectId
+		? filterSessionsByFolder(activeSessions, folderFilter, folderRepos)
+		: folderFilter === "all"
+			? activeSessions
+			: folderFilter === "__workspace_wide__"
+				? activeSessions.filter((session) => {
+					const repos = all.find((candidate) => candidate.id === session.workspaceId)?.workspaceRepos ?? [];
+					return repos.length > 0 && workspaceFolderForSession(session, repos).id === "__workspace_wide__";
+				})
+				: activeSessions.filter((session) => {
+					const option = globalFolderOptions.find((candidate) => candidate.value === folderFilter);
+					return Boolean(option && session.workspaceId === option.workspaceId && session.workspaceFolder === option.relativePath);
+				})).map((session) =>
 		session.status === "no_signal" || session.displayStatus === "No signal"
 			? { ...session, kanbanColumn: "building" as const }
 			: session,
@@ -346,12 +365,14 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 					<ProjectBoardEmpty actions={guest ? null : <ProjectBoardActions actions={projectActions} placement="empty" />} />
 				) : (
 					<div className="flex h-full min-h-0 flex-col">
-						{folderRepos.length > 0 ? <label className="flex shrink-0 items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+						{(projectId ? folderRepos.length > 0 : globalFolderOptions.length > 0) ? <label className="flex shrink-0 items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
 							<span>{t("shell.folderFilter", { defaultValue: "Folder" })}</span>
 							<select aria-label={t("shell.folderFilter", { defaultValue: "Folder" })} className="h-7 rounded-md border border-border bg-background px-2 text-foreground" value={folderFilter} onChange={(event) => setFolderFilter(event.target.value)}>
 								<option value="all">{t("shell.allFolders", { defaultValue: "All folders" })}</option>
 								<option value="__workspace_wide__">{t("shell.workspaceWide", { defaultValue: "Workspace-wide" })}</option>
-								{folderRepos.map((repo) => <option key={repo.relativePath} value={repo.relativePath}>{repo.name}</option>)}
+								{projectId
+									? folderRepos.map((repo) => <option key={repo.relativePath} value={repo.relativePath}>{repo.name}</option>)
+									: globalFolderOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
 							</select>
 						</label> : null}
 					<SessionsBoardGridView
@@ -369,7 +390,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 								onOpenArtifacts={() => openSessionArtifacts(session)}
 								onTerminate={!hostId || connected ? ({ deleteArtifacts }) => terminateSession.mutate({ ...session, deleteArtifacts }) : undefined}
 								session={session}
-								repos={folderRepos}
+								repos={all.find((candidate) => candidate.id === session.workspaceId)?.workspaceRepos ?? folderRepos}
 							/>
 						)}
 						sessions={boardSessions}

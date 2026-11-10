@@ -1872,6 +1872,7 @@ func mergeMetadata(base, in domain.SessionMetadata) domain.SessionMetadata {
 	set(&base.Branch, in.Branch)
 	set(&base.WorkspacePath, in.WorkspacePath)
 	set(&base.WorkspaceRepoPath, in.WorkspaceRepoPath)
+	set(&base.WorkspaceFolder, in.WorkspaceFolder)
 	set(&base.DiffBaseSHA, in.DiffBaseSHA)
 	set(&base.DiffBaseRef, in.DiffBaseRef)
 	set(&base.RuntimeHandleID, in.RuntimeHandleID)

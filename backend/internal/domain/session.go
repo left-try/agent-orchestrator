@@ -171,6 +171,7 @@ type SessionMetadata struct {
 	Branch            string `json:"branch,omitempty"`
 	WorkspacePath     string `json:"workspacePath,omitempty"`
 	WorkspaceRepoPath string `json:"workspaceRepoPath,omitempty"`
+	WorkspaceFolder   string `json:"workspaceFolder,omitempty"`
 	DiffBaseSHA       string `json:"diffBaseSha,omitempty"`
 	DiffBaseRef       string `json:"diffBaseRef,omitempty"`
 	RuntimeHandleID   string `json:"runtimeHandleId,omitempty"`

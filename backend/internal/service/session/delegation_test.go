@@ -123,6 +123,40 @@ func TestDelegateTaskNamesGitWorkspaceDuringSpawn(t *testing.T) {
 	}
 }
 
+func TestDelegateTaskPersistsExplicitWorkspaceFolderInSpawnConfig(t *testing.T) {
+	st := newFakeStore()
+	st.projects["workspace"] = domain.ProjectRecord{ID: "workspace", Kind: domain.ProjectKindWorkspace}
+	st.workspaceRepos["workspace"] = []domain.WorkspaceRepoRecord{{
+		ProjectID: "workspace", Name: "api", RelativePath: "services/api", GitStatus: domain.GitStatusReady,
+	}}
+	cmd := &fakeCommander{}
+	_, err := (&Service{store: st, manager: cmd}).DelegateTask(context.Background(), DelegateTaskInput{
+		ProjectID: "workspace", WorkspaceFolder: "services/api", Brief: "Fix API validation",
+	})
+	if err != nil {
+		t.Fatalf("DelegateTask: %v", err)
+	}
+	if got := cmd.spawnedCfg.WorkspaceFolder; got != "services/api" {
+		t.Fatalf("spawn workspace folder = %q, want services/api", got)
+	}
+}
+
+func TestDelegateTaskRejectsUnknownWorkspaceFolder(t *testing.T) {
+	st := newFakeStore()
+	st.projects["workspace"] = domain.ProjectRecord{ID: "workspace", Kind: domain.ProjectKindWorkspace}
+	st.workspaceRepos["workspace"] = []domain.WorkspaceRepoRecord{{
+		ProjectID: "workspace", Name: "api", RelativePath: "services/api", GitStatus: domain.GitStatusReady,
+	}}
+	cmd := &fakeCommander{}
+	_, err := (&Service{store: st, manager: cmd}).DelegateTask(context.Background(), DelegateTaskInput{
+		ProjectID: "workspace", WorkspaceFolder: "../outside", Brief: "Fix API validation",
+	})
+	var apiError *apierr.Error
+	if !errors.As(err, &apiError) || apiError.Code != "INVALID_WORKSPACE_FOLDER" || cmd.spawnCalls != 0 {
+		t.Fatalf("unknown folder: spawnCalls=%d err=%v", cmd.spawnCalls, err)
+	}
+}
+
 func TestDelegateTaskUsesConfirmedBranchWithoutRenaming(t *testing.T) {
 	st := newFakeStore()
 	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Path: newWorkspaceRepo(t)}

@@ -160,7 +160,7 @@ func (m *Service) List(ctx context.Context) ([]Summary, error) {
 		} else {
 			folderMissing = !exists
 		}
-		out = append(out, Summary{
+		summary := Summary{
 			ID:                domain.ProjectID(row.ID),
 			Name:              projectDisplayName(row),
 			Path:              row.Path,
@@ -168,7 +168,15 @@ func (m *Service) List(ctx context.Context) ([]Summary, error) {
 			SessionPrefix:     resolveSessionPrefix(row),
 			OrchestratorAgent: row.Config.Orchestrator.Harness,
 			FolderMissing:     folderMissing,
-		})
+		}
+		if row.Kind.WithDefault() == domain.ProjectKindWorkspace {
+			repos, err := m.store.ListWorkspaceRepos(ctx, row.ID)
+			if err != nil {
+				return nil, apierr.Internal("PROJECTS_LIST_FAILED", "Failed to load workspace repositories")
+			}
+			summary.WorkspaceRepos = workspaceReposFromRecords(row.Path, repos)
+		}
+		out = append(out, summary)
 	}
 	return out, nil
 }

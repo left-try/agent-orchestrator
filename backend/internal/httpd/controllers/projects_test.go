@@ -199,6 +199,56 @@ func TestProjectsAPI_ListAddGet(t *testing.T) {
 
 }
 
+func TestProjectsAPI_ListIncludesWorkspaceChildFolders(t *testing.T) {
+	srv := newTestServer(t)
+	parent := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"api", "web"} {
+		repo := filepath.Join(parent, name)
+		if err := os.MkdirAll(repo, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command("git", "init", "-b", "main", repo).CombinedOutput(); err != nil {
+			t.Fatalf("git init %s: %v\n%s", name, err, out)
+		}
+		if out, err := exec.Command("git", "-C", repo, "-c", "user.email=ao@example.com", "-c", "user.name=AO Test", "commit", "--allow-empty", "-m", "initial").CombinedOutput(); err != nil {
+			t.Fatalf("git commit %s: %v\n%s", name, err, out)
+		}
+		if out, err := exec.Command("git", "-C", repo, "remote", "add", "origin", "https://example.com/ao/"+name+".git").CombinedOutput(); err != nil {
+			t.Fatalf("git remote %s: %v\n%s", name, err, out)
+		}
+	}
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/projects", `{"path":`+quote(parent)+`,"projectId":"workspace","asWorkspace":true}`)
+	if status != http.StatusCreated {
+		t.Fatalf("POST workspace = %d, want 201; body=%s", status, body)
+	}
+
+	body, status, _ = doRequest(t, srv, "GET", "/api/v1/projects", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET projects = %d, want 200; body=%s", status, body)
+	}
+	var list struct {
+		Projects []struct {
+			ID             string `json:"id"`
+			WorkspaceRepos []struct {
+				Name         string `json:"name"`
+				RelativePath string `json:"relativePath"`
+			} `json:"workspaceRepos"`
+		} `json:"projects"`
+	}
+	mustJSON(t, body, &list)
+	if len(list.Projects) != 1 || list.Projects[0].ID != "workspace" {
+		t.Fatalf("projects = %#v, want workspace project", list.Projects)
+	}
+	got := list.Projects[0].WorkspaceRepos
+	if len(got) != 2 || got[0].Name != "api" || got[0].RelativePath != "api" || got[1].Name != "web" || got[1].RelativePath != "web" {
+		t.Fatalf("workspace repos from list = %#v, want api and web children", got)
+	}
+}
+
 func TestProjectsAPI_UpdateSettings(t *testing.T) {
 	srv := newTestServer(t)
 	repo := gitRepo(t, "legacy-project")
@@ -518,6 +568,12 @@ type projectSummary struct {
 	Path string `json:"path"`
 
 	SessionPrefix string `json:"sessionPrefix"`
+
+	WorkspaceRepos []struct {
+		Name         string `json:"name"`
+		RelativePath string `json:"relativePath"`
+		Repo         string `json:"repo"`
+	} `json:"workspaceRepos,omitempty"`
 }
 
 type projectBody struct {

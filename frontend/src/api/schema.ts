@@ -5683,6 +5683,7 @@ export interface components {
             /** @enum {string} */
             workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
             workspaceCleanupReportOnly?: boolean;
+            workspaceFolder?: string;
         };
         ControllersSetKeepAwakeRequest: {
             enabled: boolean;
@@ -6117,6 +6118,7 @@ export interface components {
             model?: string;
             projectId: string;
             taskPreparation?: string;
+            workspaceFolder?: string;
         };
         DelegateTaskResponse: {
             ok: boolean;
@@ -6787,6 +6789,7 @@ export interface components {
             path: string;
             resolveError?: string;
             sessionPrefix: string;
+            workspaceRepos?: components["schemas"]["WorkspaceRepo"][];
         };
         PromoteQueuedTurnResponse: {
             activityId: string;

@@ -167,6 +167,27 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
+	it("filters workspace tasks by their explicit child folder and shows the folder marker", () => {
+		const assigned = boardSession({ id: "api-task", title: "Fix API", status: "working", workspaceFolder: "services/api" });
+		const wide = boardSession({ id: "wide-task", title: "Workspace-wide task", status: "working" });
+		const workspace = {
+			...workspaceWithSessions([assigned, wide]),
+			kind: "workspace" as const,
+			workspaceRepos: [{ name: "api", relativePath: "services/api", repo: "acme/api" }],
+		};
+		workspaceQueryMock.mockReturnValue({ data: [workspace], isSuccess: true });
+		renderBoard("p1");
+		const card = screen.getByText("Fix API").closest("[data-testid='board-session-card']") as HTMLElement;
+		expect(document.querySelector('[data-workspace-folder="services/api"]')).toBeInTheDocument();
+		const filter = screen.getByLabelText("Folder");
+		fireEvent.change(filter, { target: { value: "services/api" } });
+		expect(screen.getByText("Fix API")).toBeInTheDocument();
+		expect(screen.queryByText("Workspace-wide task")).not.toBeInTheDocument();
+		fireEvent.change(filter, { target: { value: "__workspace_wide__" } });
+		expect(screen.queryByText("Fix API")).not.toBeInTheDocument();
+		expect(screen.getByText("Workspace-wide task")).toBeInTheDocument();
+	});
+
 	it("shows the Cloud loader instead of Chat while a cloud orchestrator is starting", () => {
 		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
 		useUiStore.getState().setProjectProvisioning("p1", true);

@@ -12,6 +12,7 @@ type Summary struct {
 	OrchestratorAgent domain.AgentHarness `json:"orchestratorAgent,omitempty"`
 	ResolveError      string              `json:"resolveError,omitempty"`
 	FolderMissing     bool                `json:"folderMissing"`
+	WorkspaceRepos    []WorkspaceRepo     `json:"workspaceRepos,omitempty"`
 }
 
 // Project is the full read-model returned by GET /api/v1/projects/{id}.
