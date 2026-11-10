@@ -72,7 +72,7 @@ export function ProjectIconDialog({ open, onOpenChange, projectName, value, onSa
    <label className="block font-medium">Upload PNG <input type="file" accept="image/png" className="mt-2 block w-full text-xs text-muted-foreground file:mr-3 file:cursor-pointer file:rounded-xl file:border-0 file:bg-secondary file:px-3 file:py-2 file:text-sm file:text-secondary-foreground hover:file:bg-interactive-hover" onChange={(e) => upload(e.target.files?.[0])} /></label>
    <div className="flex items-center gap-3 text-muted-foreground">Preview: {choice ? <CustomProjectIcon choice={choice} className="size-8 rounded object-cover" /> : <span className="text-muted-foreground">Repository icon</span>}</div>
    {error && <p role="alert" className="text-destructive">{error}</p>}
-   <div className="flex justify-end gap-2"><Button variant="footer" onClick={() => onOpenChange(false)}>Cancel</Button><Button variant="footer-primary" onClick={() => save(choice)}>Save</Button></div>
+   <div className="flex justify-end gap-2"><Button variant="secondary" onClick={() => onOpenChange(false)}>Cancel</Button><Button variant="primary" onClick={() => save(choice)}>Save</Button></div>
   </div>
  </DialogContent></Dialog>;
 }

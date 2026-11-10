@@ -177,7 +177,6 @@ describe("SessionsBoard", () => {
 		};
 		workspaceQueryMock.mockReturnValue({ data: [workspace], isSuccess: true });
 		renderBoard("p1");
-		const card = screen.getByText("Fix API").closest("[data-testid='board-session-card']") as HTMLElement;
 		expect(document.querySelector('[data-workspace-folder="services/api"]')).toBeInTheDocument();
 		const filter = screen.getByLabelText("Folder");
 		fireEvent.change(filter, { target: { value: "services/api" } });
