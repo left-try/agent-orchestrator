@@ -167,7 +167,7 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
-	it("filters workspace tasks by their explicit child folder and shows the folder marker", () => {
+	it("filters workspace tasks by their explicit child folder without marking every card", async () => {
 		const assigned = boardSession({ id: "api-task", title: "Fix API", status: "working", workspaceFolder: "services/api" });
 		const wide = boardSession({ id: "wide-task", title: "Workspace-wide task", status: "working" });
 		const workspace = {
@@ -177,12 +177,14 @@ describe("SessionsBoard", () => {
 		};
 		workspaceQueryMock.mockReturnValue({ data: [workspace], isSuccess: true });
 		renderBoard("p1");
-		expect(document.querySelector('[data-workspace-folder="services/api"]')).toBeInTheDocument();
-		const filter = screen.getByLabelText("Folder");
-		fireEvent.change(filter, { target: { value: "services/api" } });
+		expect(document.querySelector('[data-workspace-folder="services/api"]')).not.toBeInTheDocument();
+		const user = userEvent.setup();
+		await user.click(screen.getByRole("button", { name: "Folder" }));
+		await user.click(screen.getByRole("menuitem", { name: "api" }));
 		expect(screen.getByText("Fix API")).toBeInTheDocument();
 		expect(screen.queryByText("Workspace-wide task")).not.toBeInTheDocument();
-		fireEvent.change(filter, { target: { value: "__workspace_wide__" } });
+		await user.click(screen.getByRole("button", { name: "Folder" }));
+		await user.click(screen.getByRole("menuitem", { name: "Workspace-wide" }));
 		expect(screen.queryByText("Fix API")).not.toBeInTheDocument();
 		expect(screen.getByText("Workspace-wide task")).toBeInTheDocument();
 	});

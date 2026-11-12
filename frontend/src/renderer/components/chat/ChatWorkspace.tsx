@@ -114,6 +114,7 @@ import {
 } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
 import { DraggableWorkspaceTab, SessionPaneTab, SessionTabSlot } from "../CenterPane";
+import { WorkspaceFolderMarker } from "../WorkspaceFolderMarker";
 import { useSplitCloseFocused, useSplitHiddenTabKeys } from "../split-pane-context";
 import { TabContextMenu, type TabMenuSpec } from "../TabContextMenu";
 import { Button } from "../ui/button";
@@ -2517,6 +2518,7 @@ function ChatHeader({
 											session={session}
 											tabAction={sessionTabAction}
 											tabActionPinned={sessionTabActionPinned}
+										trailing={<WorkspaceFolderMarker session={session} />}
 										/>
 									) : (
 										<SessionPaneTab

@@ -306,6 +306,14 @@ const chatSession = {
 	prs: [],
 } satisfies WorkspaceSession;
 
+describe("workspace folder context", () => {
+	it("shows the assigned folder only in the open chat tab", () => {
+		render(<ChatWorkspace snapshot={idleSnapshot()} session={{ ...chatSession, workspaceFolder: "services/api" }} />);
+		expect(screen.getByTestId("workspace-folder-marker")).toHaveAttribute("data-workspace-folder", "services/api");
+		expect(screen.getByTestId("workspace-folder-marker")).toHaveTextContent("api");
+	});
+});
+
 describe("HumanMessage attachments", () => {
 	it("loads a remote session's staged image from its proxy, not the local daemon", () => {
 		const snapshot: ConversationSnapshot = {

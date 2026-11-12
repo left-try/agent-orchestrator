@@ -165,6 +165,30 @@ func TestSpawnAsyncChat_FirstRowIsProvisioning(t *testing.T) {
 	}
 }
 
+func TestSpawnAsyncChatPreservesWorkspaceFolder(t *testing.T) {
+	launcher := &recordingLauncher{}
+	m, st, _ := newChatManager(launcher)
+	m.browserCapabilities = browsersvc.NewAuthority()
+	deferred := deferredBackground(m)
+	cfg := asyncChatSpawnConfig("work in the API repo")
+	cfg.WorkspaceFolder = "services/api"
+
+	rec, _, _, err := m.Spawn(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if got := rec.Metadata.WorkspaceFolder; got != cfg.WorkspaceFolder {
+		t.Fatalf("initial workspace folder = %q, want %q", got, cfg.WorkspaceFolder)
+	}
+	if len(*deferred) != 1 {
+		t.Fatalf("background work = %d, want 1", len(*deferred))
+	}
+	(*deferred)[0]()
+	if got := st.sessions[rec.ID].Metadata.WorkspaceFolder; got != cfg.WorkspaceFolder {
+		t.Fatalf("committed workspace folder = %q, want %q", got, cfg.WorkspaceFolder)
+	}
+}
+
 func TestSpawnAsyncChatPreservesForegroundEffortDuringBackgroundTitle(t *testing.T) {
 	for _, prepared := range []bool{false, true} {
 		name := "fresh"

@@ -724,6 +724,8 @@ type SessionPaneTabProps = {
 	title?: string;
 	/** Session-scoped controls (interface switch, handoff) in the tab's icon slot. */
 	tabAction?: ReactNode;
+	/** Compact context displayed after the session title. */
+	trailing?: ReactNode;
 	/** Keep the action showing at rest, e.g. while an interface switch runs. */
 	tabActionPinned?: boolean;
 	/** Give a tab with no session (a reviewer) the strip's right-click menu. */
@@ -744,6 +746,7 @@ export function SessionPaneTab({
 	icon,
 	title,
 	tabAction,
+	trailing,
 	tabActionPinned = false,
 	tabMenu = false,
 	tabKey = SESSION_TAB_KEY,
@@ -816,6 +819,7 @@ export function SessionPaneTab({
 			editingContent={editingContent}
 			icon={tabIcon}
 			label={label}
+			trailing={trailing}
 		/>
 	);
 	if (rename.isEditing || (!session && !tabMenu)) return tabFrame;

@@ -60,6 +60,7 @@ import { useDiagnosticsEnabled, usePressureState, useSessionMemory } from "../ho
 import { AppMemoryIndicator, toSessionFacts } from "./SessionMemoryPanel";
 import { Button } from "./ui/button";
 import { filterSessionsByFolder, workspaceFolderForSession } from "../lib/workspace-folder";
+import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import {
 	ArchivedSessionCardAdapter,
@@ -367,13 +368,21 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 					<div className="flex h-full min-h-0 flex-col">
 						{(projectId ? folderRepos.length > 0 : globalFolderOptions.length > 0) ? <label className="flex shrink-0 items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
 							<span>{t("shell.folderFilter", { defaultValue: "Folder" })}</span>
-							<select aria-label={t("shell.folderFilter", { defaultValue: "Folder" })} className="h-7 rounded-md border border-border bg-background px-2 text-foreground" value={folderFilter} onChange={(event) => setFolderFilter(event.target.value)}>
-								<option value="all">{t("shell.allFolders", { defaultValue: "All folders" })}</option>
-								<option value="__workspace_wide__">{t("shell.workspaceWide", { defaultValue: "Workspace-wide" })}</option>
-								{projectId
-									? folderRepos.map((repo) => <option key={repo.relativePath} value={repo.relativePath}>{repo.name}</option>)
-									: globalFolderOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-							</select>
+							<SettingsOptionMenu
+								aria-label={t("shell.folderFilter", { defaultValue: "Folder" })}
+								menuAlign="start"
+								menuClassName="w-56 max-h-72"
+								onChange={setFolderFilter}
+								options={[
+									{ value: "all", label: t("shell.allFolders", { defaultValue: "All folders" }) },
+									{ value: "__workspace_wide__", label: t("shell.workspaceWide", { defaultValue: "Workspace-wide" }) },
+									...(projectId
+										? folderRepos.map((repo) => ({ value: repo.relativePath, label: repo.name }))
+										: globalFolderOptions.map((option) => ({ value: option.value, label: option.label }))),
+								]}
+								triggerClassName="h-7 min-w-36 justify-between gap-1 rounded-md border border-border px-2 text-foreground"
+								value={folderFilter}
+							/>
 						</label> : null}
 					<SessionsBoardGridView
 						columns={columns}
@@ -390,7 +399,6 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 								onOpenArtifacts={() => openSessionArtifacts(session)}
 								onTerminate={!hostId || connected ? ({ deleteArtifacts }) => terminateSession.mutate({ ...session, deleteArtifacts }) : undefined}
 								session={session}
-								repos={all.find((candidate) => candidate.id === session.workspaceId)?.workspaceRepos ?? folderRepos}
 							/>
 						)}
 						sessions={boardSessions}

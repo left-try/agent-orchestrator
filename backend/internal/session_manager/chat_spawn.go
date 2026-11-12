@@ -278,6 +278,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 				Branch:            in.workspace.Branch,
 				WorkspacePath:     in.workspace.Path,
 				WorkspaceRepoPath: in.workspace.RepoPath,
+				WorkspaceFolder:   in.cfg.WorkspaceFolder,
 				Prompt:            in.prompt,
 				DiffBaseSHA:       diffBaseSHA,
 				DiffBaseRef:       diffBaseRef,
