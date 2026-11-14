@@ -13,6 +13,9 @@ type Summary struct {
 	ResolveError      string              `json:"resolveError,omitempty"`
 	FolderMissing     bool                `json:"folderMissing"`
 	WorkspaceRepos    []WorkspaceRepo     `json:"workspaceRepos,omitempty"`
+	// AutoSpawnPauses lists the harnesses whose automatic starts (tracker
+	// intake, schedules) stopped after three identical failures in a row.
+	AutoSpawnPauses []domain.AutoSpawnPause `json:"autoSpawnPauses,omitempty"`
 }
 
 // Project is the full read-model returned by GET /api/v1/projects/{id}.
