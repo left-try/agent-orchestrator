@@ -5684,6 +5684,7 @@ export interface components {
             workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
             workspaceCleanupReportOnly?: boolean;
             workspaceFolder?: string;
+            workspaceFolders: string[];
         };
         ControllersSetKeepAwakeRequest: {
             enabled: boolean;

@@ -124,20 +124,18 @@ describe("NewChatPage", () => {
 		expect(screen.getByRole("status").textContent).toContain("fix/login");
 		expect(screen.queryByRole("alert")).toBeNull();
 	});
-	it("sends an explicitly selected workspace folder with a new task", async () => {
+	it("does not assign a folder before changed files exist", async () => {
 		h.workspaceRepos = [{ name: "api", relativePath: "services/api", repo: "acme/api" }];
 		h.launch.mockResolvedValue("sess-1");
 		renderPage();
-		const user = userEvent.setup();
-		await user.click(screen.getByRole("button", { name: "Folder" }));
-		await user.click(await screen.findByRole("menuitem", { name: "api" }));
+		expect(screen.queryByRole("button", { name: "Folder" })).not.toBeInTheDocument();
 		await act(async () => {
 			await h.workspace?.onSend?.("Fix API validation", undefined, "folder-task");
 		});
 		expect(h.launch).toHaveBeenCalledWith("Fix API validation", expect.objectContaining({
 			clientRequestId: "folder-task",
-			workspaceFolder: "services/api",
 		}));
+		expect(h.launch.mock.calls[0]?.[1]).not.toHaveProperty("workspaceFolder");
 	});
 	it("creates the session on first send and hands its brief to the session chat", async () => {
 		let resolve!: (sessionId: string) => void;

@@ -539,6 +539,9 @@ func (r SessionRecord) ControllerOwner() SessionControllerOwner {
 // persisted.
 type Session struct {
 	SessionRecord
+	// WorkspaceFolders is derived from files changed in child repositories.
+	// It is empty when changes are workspace-wide or no child repo is touched.
+	WorkspaceFolders []string `json:"workspaceFolders"`
 	// WorkspaceCleanup is a durable teardown fact for the current generation.
 	WorkspaceCleanup WorkspaceDisposition `json:"workspaceCleanup,omitempty" enum:"pending,removed,preserved_dirty,failed,not_applicable"`
 	// WorkspaceCleanupReportOnly marks a cleanup a sweep started rather than an

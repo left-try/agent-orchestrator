@@ -237,7 +237,7 @@ describe("SessionsBoard", () => {
 
 		expect(screen.getByText("Workspace-wide task")).toBeInTheDocument();
 		expect(screen.getByText("Single-repo task")).toBeInTheDocument();
-		expect(screen.queryByText("API folder task")).not.toBeInTheDocument();
+		expect(screen.getByText("API folder task")).toBeInTheDocument();
 	});
 
 	it("shows the Cloud loader instead of Chat while a cloud orchestrator is starting", () => {

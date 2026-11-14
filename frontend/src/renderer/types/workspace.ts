@@ -113,7 +113,9 @@ export type WorkspaceSession = {
 	terminalGeneration?: string;
 	workspaceId: string;
 	workspaceName: string;
-	/** Explicit child-folder assignment when known; absent means workspace-wide. */
+	/** Child folders containing changed files; empty means workspace-wide. */
+	workspaceFolders?: string[];
+	/** Legacy explicit assignment, used only with daemons predating workspaceFolders. */
 	workspaceFolder?: string;
 	title: string;
 	/** Raw issue/task identifier from the daemon. Intake ids are provider-prefixed. */

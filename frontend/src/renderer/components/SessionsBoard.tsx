@@ -59,7 +59,7 @@ import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useDiagnosticsEnabled, usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
 import { AppMemoryIndicator, toSessionFacts } from "./SessionMemoryPanel";
 import { Button } from "./ui/button";
-import { filterSessionsByFolder, workspaceFolderForSession } from "../lib/workspace-folder";
+import { filterSessionsByFolder, workspaceFoldersForSession } from "../lib/workspace-folder";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import {
@@ -189,11 +189,11 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			: folderFilter === "__workspace_wide__"
 				? activeSessions.filter((session) => {
 					const repos = all.find((candidate) => candidate.id === session.workspaceId)?.workspaceRepos ?? [];
-					return repos.length === 0 || workspaceFolderForSession(session, repos).id === "__workspace_wide__";
+					return repos.length === 0 || workspaceFoldersForSession(session, repos).length === 0;
 				})
 				: activeSessions.filter((session) => {
 					const option = globalFolderOptions.find((candidate) => candidate.value === folderFilter);
-					return Boolean(option && session.workspaceId === option.workspaceId && session.workspaceFolder === option.relativePath);
+					return Boolean(option && session.workspaceId === option.workspaceId && workspaceFoldersForSession(session, all.find((candidate) => candidate.id === option.workspaceId)?.workspaceRepos ?? []).some((folder) => folder.id === option.relativePath));
 				})).map((session) =>
 		session.status === "no_signal" || session.displayStatus === "No signal"
 			? { ...session, kanbanColumn: "building" as const }

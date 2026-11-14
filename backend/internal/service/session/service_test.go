@@ -2298,6 +2298,49 @@ func TestWorkspaceFilesIncludeWorkspaceProjectChildRepoDiffs(t *testing.T) {
 	}
 }
 
+func TestSessionFolderAttributionFollowsChangedChildFiles(t *testing.T) {
+	root := newWorkspaceRepo(t)
+	rootBase := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
+	makeChild := func(name string) (string, string) {
+		child := filepath.Join(root, name)
+		if err := os.MkdirAll(child, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, child, "init")
+		runGit(t, child, "config", "user.email", "ao@example.com")
+		runGit(t, child, "config", "user.name", "AO Tests")
+		writeWorkspaceFile(t, child, "README.md", "base\n")
+		runGit(t, child, "add", ".")
+		runGit(t, child, "commit", "-m", "initial")
+		return child, strings.TrimSpace(runGit(t, child, "rev-parse", "HEAD"))
+	}
+	api, apiBase := makeChild("services-api")
+	web, webBase := makeChild("web")
+	runGit(t, api, "switch", "-c", "ao/work")
+	writeWorkspaceFile(t, api, "README.md", "api changed\n")
+	runGit(t, web, "switch", "-c", "ao/work")
+
+	st := newFakeStore()
+	st.projects["ws"] = domain.ProjectRecord{ID: "ws", Kind: domain.ProjectKindWorkspace}
+	st.sessions["ws-1"] = domain.SessionRecord{ID: "ws-1", ProjectID: "ws", Metadata: domain.SessionMetadata{WorkspacePath: root, WorkspaceFolder: "web"}}
+	st.worktrees["ws-1"] = []domain.SessionWorktreeRecord{
+		{SessionID: "ws-1", RepoName: domain.RootWorkspaceRepoName, WorktreePath: root, BaseSHA: rootBase},
+		{SessionID: "ws-1", RepoName: "services-api", WorktreePath: api, BaseSHA: apiBase},
+		{SessionID: "ws-1", RepoName: "web", WorktreePath: web, BaseSHA: webBase},
+	}
+	svc := &Service{store: st}
+	got := svc.changedWorkspaceFolders(t.Context(), st.sessions["ws-1"])
+	if !slices.Equal(got, []string{"services-api"}) {
+		t.Fatalf("folder attribution = %v, want only changed child path services-api (ignoring explicit metadata and clean worktrees)", got)
+	}
+	writeWorkspaceFile(t, web, "README.md", "web changed\n")
+	svc.InvalidateWorkspaceCache("ws-1")
+	got = svc.changedWorkspaceFolders(t.Context(), st.sessions["ws-1"])
+	if !slices.Equal(got, []string{"services-api", "web"}) {
+		t.Fatalf("folder attribution after second child changes = %v, want [services-api web]", got)
+	}
+}
+
 func TestWorkspaceProjectChildRepoRecomputesBaseAfterRebase(t *testing.T) {
 	root := newWorkspaceRepo(t)
 	rootBase := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))

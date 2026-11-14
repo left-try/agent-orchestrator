@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -203,26 +204,27 @@ type outputTypeReconciler interface {
 // session operations to the internal sessionmanager.Manager and owns read-model
 // assembly, including user-facing display status derivation.
 type Service struct {
-	manager             commander
-	store               Store
-	prClaimer           ports.PRClaimer
-	scm                 scmProvider
-	tracker             ports.Tracker
-	clock               func() time.Time
-	dataDir             string
-	telemetry           ports.EventSink
-	usageArchiveFlush   func(context.Context)
-	milestones          ports.InstallMilestones
-	firstSession        firstSessionClaims
-	delivery            *deliverytelemetry.Recorder
-	logger              *slog.Logger
-	backgroundContext   context.Context
-	agentReadiness      ports.AgentReadinessProvider
-	runBackground       func(func())
-	orchestratorLocksMu sync.Mutex
-	orchestratorLocks   map[domain.ProjectID]*sync.Mutex
-	workspaceCache      *workspaceCache
-	workspaceManifests  *workspaceManifestIndex
+	manager               commander
+	store                 Store
+	prClaimer             ports.PRClaimer
+	scm                   scmProvider
+	tracker               ports.Tracker
+	clock                 func() time.Time
+	dataDir               string
+	telemetry             ports.EventSink
+	usageArchiveFlush     func(context.Context)
+	milestones            ports.InstallMilestones
+	firstSession          firstSessionClaims
+	delivery              *deliverytelemetry.Recorder
+	logger                *slog.Logger
+	backgroundContext     context.Context
+	agentReadiness        ports.AgentReadinessProvider
+	runBackground         func(func())
+	orchestratorLocksMu   sync.Mutex
+	orchestratorLocks     map[domain.ProjectID]*sync.Mutex
+	workspaceCache        *workspaceCache
+	workspaceManifests    *workspaceManifestIndex
+	workspaceProjectKinds sync.Map
 	// commitSelections caches resolved commit selections. Their keys are
 	// immutable SHAs, so entries never go stale.
 	commitSelections *commitSelectionCache
@@ -1731,8 +1733,10 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 	}); ok {
 		readiness = recovery.SessionStatusReadiness(rec)
 	}
+	workspaceFolders := s.changedWorkspaceFolders(ctx, rec)
 	return domain.Session{
 		SessionRecord:              rec,
+		WorkspaceFolders:           workspaceFolders,
 		WorkspaceCleanup:           cleanup.WorkspaceDisposition,
 		WorkspaceCleanupReportOnly: cleanup.ReportOnly,
 		StatusReadiness:            readiness,
@@ -1746,6 +1750,57 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		ArtifactFiles:    artifactFiles,
 		PRs:              prs,
 	}, nil
+}
+
+// changedWorkspaceFolders derives child-folder attribution from the current
+// changed-file manifest. A workspace with no changed child files is
+// workspace-wide; merely having a child worktree never implies attribution.
+func (s *Service) changedWorkspaceFolders(ctx context.Context, rec domain.SessionRecord) []string {
+	if rec.ProjectID == "" {
+		return []string{}
+	}
+	isWorkspace, found := s.workspaceProjectKinds.Load(rec.ProjectID)
+	if !found {
+		project, ok, err := s.store.GetProject(ctx, string(rec.ProjectID))
+		if err != nil {
+			return []string{}
+		}
+		isWorkspace = ok && project.Kind == domain.ProjectKindWorkspace
+		s.workspaceProjectKinds.Store(rec.ProjectID, isWorkspace)
+	}
+	if isWorkspace != true {
+		return []string{}
+	}
+	manifest, err := s.GetWorkspaceManifest(ctx, rec.ID)
+	if err != nil {
+		return []string{}
+	}
+	rows, err := s.store.ListSessionWorktrees(ctx, rec.ID)
+	if err != nil {
+		return []string{}
+	}
+	prefixes := workspaceProjectPrefixes(rec.Metadata.WorkspacePath, rows)
+	changed := make(map[string]struct{})
+	for _, file := range manifest.Files {
+		bestPrefix := ""
+		for _, prefix := range prefixes {
+			if prefix == "" || (file.Path != prefix && !strings.HasPrefix(file.Path, prefix+"/")) {
+				continue
+			}
+			if len(prefix) > len(bestPrefix) {
+				bestPrefix = prefix
+			}
+		}
+		if bestPrefix != "" {
+			changed[bestPrefix] = struct{}{}
+		}
+	}
+	folders := make([]string, 0, len(changed))
+	for name := range changed {
+		folders = append(folders, name)
+	}
+	sort.Strings(folders)
+	return folders
 }
 
 // toAPIError maps the session engine's sentinel errors to their REST API

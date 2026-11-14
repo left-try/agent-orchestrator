@@ -13,10 +13,18 @@ describe("workspace folder attribution", () => {
 	});
 
 	it("uses the registered visible folder name and filters by its relative path", () => {
-		const session = { workspaceFolder: "services/api" };
+		const session = { workspaceFolders: ["services/api"] };
 		expect(workspaceFolderForSession(session, repos)).toEqual({ id: "services/api", label: "api" });
 		const unassigned = {};
 		expect(filterSessionsByFolder([session, unassigned], "services/api", repos)).toEqual([session]);
+		expect(filterSessionsByFolder([session, unassigned], WORKSPACE_WIDE_FOLDER, repos)).toEqual([unassigned]);
 		expect(filterSessionsByFolder([session], "all", repos)).toEqual([session]);
+	});
+
+	it("keeps a task in every child folder where its changed files live", () => {
+		const multi = { workspaceFolders: ["apps/web", "services/api"] };
+		expect(filterSessionsByFolder([multi], "services/api", repos)).toEqual([multi]);
+		expect(filterSessionsByFolder([multi], "apps/web", repos)).toEqual([multi]);
+		expect(filterSessionsByFolder([multi], WORKSPACE_WIDE_FOLDER, repos)).toEqual([]);
 	});
 });

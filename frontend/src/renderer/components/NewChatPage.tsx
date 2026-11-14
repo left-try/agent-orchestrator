@@ -43,11 +43,6 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const queryClient = useQueryClient();
 	// A Cloud task's session starts spinning up as the page opens (not Coder's).
 	const task = useTaskLaunch({ projectId, hostId });
-	const localWorkspace = useWorkspaceQuery().data?.find((item) => item.id === projectId);
-	const remoteWorkspace = useRemoteWorkspaces().data?.find((item) => item.id === projectId && item.hostId === hostId);
-	const workspace = hostId ? remoteWorkspace : localWorkspace;
-	const [workspaceFolder, setWorkspaceFolder] = useState("");
-	useEffect(() => setWorkspaceFolder(""), [projectId, hostId]);
 	// Sends read the latest render's launch, not the one they started in.
 	const taskRef = useRef(task);
 	taskRef.current = task;
@@ -280,7 +275,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			const replay = saved?.replay ?? launch.launchSnapshot();
 			setLaunched(settings);
 			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings });
-			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay, attachments, ...(workspaceFolder ? { workspaceFolder } : {}) });
+			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay, attachments });
 			resolveLaunch(clientMessageId);
 			await openSession(sessionId, brief, settings, replay.mode ?? launch.effectiveInterface, target);
 		} catch (error) {
@@ -405,18 +400,6 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				composerTray={
 					<>
 						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen} onChange={(project) => void navigate({ to: "/new", search: { project, host: hostId }, replace: true })} />
-						{workspace?.kind === "workspace" && (workspace.workspaceRepos?.length ?? 0) > 0 ? <SettingsOptionMenu
-							aria-label="Folder"
-							value={workspaceFolder}
-							options={[{ value: "", label: "Workspace-wide" }, ...(workspace.workspaceRepos ?? []).map((repo) => ({ value: repo.relativePath, label: repo.name }))]}
-							onChange={setWorkspaceFolder}
-							disabled={frozen}
-							menuAlign="start"
-							menuClassName="w-48 max-h-72"
-							triggerClassName={cn(TRIGGER_CLASS, "w-fit shrink-0")}
-							showCaret={false}
-							renderTrigger={() => <span className="inline-flex max-w-40 items-center gap-1.5 truncate">{workspaceFolder ? workspace.workspaceRepos?.find((repo) => repo.relativePath === workspaceFolder)?.name : "Workspace-wide"}</span>}
-						/> : null}
 						{hostId ? null : <MobileConnected />}
 					</>
 				}

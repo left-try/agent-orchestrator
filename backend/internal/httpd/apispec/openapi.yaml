@@ -16506,6 +16506,10 @@ components:
           type: boolean
         workspaceFolder:
           type: string
+        workspaceFolders:
+          items:
+            type: string
+          type: array
       required:
       - id
       - kind
@@ -16520,6 +16524,7 @@ components:
       - createdAt
       - updatedAt
       - isPinned
+      - workspaceFolders
       - statusReadiness
       - chatProviderPreserved
       - status
