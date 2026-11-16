@@ -191,28 +191,31 @@ export function KanbanCustomizeDialog({
 					) : null}
 				</div>
 
-				<DialogFooter className={settingsDialogFooterClass}>
-					<Button
-						className="mr-auto"
-						data-testid="kanban-reset-defaults"
-						disabled={saving}
-						onClick={() => setDraft(defaultKanbanSettings())}
-						size="sm"
-						type="button"
-						variant="ghost"
-					>
-						<RotateCcw className="size-3.5" aria-hidden="true" />
-						{t("kanban.resetDefaults")}
-					</Button>
-					<Button
-						disabled={saving}
-						onClick={() => onOpenChange(false)}
-						size="sm"
-						type="button"
-						variant="ghost"
-					>
-						{t("kanban.cancel")}
-					</Button>
+				<DialogFooter
+					className={`${settingsDialogFooterClass} flex-nowrap justify-between gap-2`}
+				>
+					<div className="flex min-w-0 items-center gap-2">
+						<Button
+							data-testid="kanban-reset-defaults"
+							disabled={saving}
+							onClick={() => setDraft(defaultKanbanSettings())}
+							size="sm"
+							type="button"
+							variant="ghost"
+						>
+							<RotateCcw className="size-3.5" aria-hidden="true" />
+							{t("kanban.resetDefaults")}
+						</Button>
+						<Button
+							disabled={saving}
+							onClick={() => onOpenChange(false)}
+							size="sm"
+							type="button"
+							variant="ghost"
+						>
+							{t("kanban.cancel")}
+						</Button>
+					</div>
 					<Button
 						data-testid="kanban-save-button"
 						disabled={saving || enabledCount === 0}
