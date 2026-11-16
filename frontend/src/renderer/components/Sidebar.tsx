@@ -422,6 +422,19 @@ function useShowMoreCap<T extends { id: string }>(
 	return { listed, hiddenCount: Math.max(0, items.length - limit), showAll, toggleShowAll };
 }
 
+/** Folder chat lists reveal 10, 20, 40... additional rows on successive clicks. */
+function useProgressiveShowMore<T>(items: T[], initial = 5) {
+	const [visibleCount, setVisibleCount] = useState(initial);
+	const [batchSize, setBatchSize] = useState(10);
+	useEffect(() => { setVisibleCount(initial); setBatchSize(10); }, [initial, items.length]);
+	const remaining = Math.max(0, items.length - visibleCount);
+	// Keep the next row beneath the translucent control so users can see that
+	// the list continues without exposing another full chat by default.
+	const listed = items.slice(0, visibleCount + (remaining > 0 ? 1 : 0));
+	const showMore = () => { setVisibleCount((count) => count + batchSize); setBatchSize((size) => size * 2); };
+	return { listed, remaining, showMore };
+}
+
 function SidebarSectionScroller({
 	children,
 	className,
@@ -1552,274 +1565,173 @@ function LazyMenuEntries({ build }: { build: () => MenuEntry[] }) {
 	return <MenuEntries entries={build()} />;
 }
 
+type WorkspaceFolderTreeNode = {
+	name: string;
+	path: string;
+	repo?: NonNullable<WorkspaceSummary["workspaceRepos"]>[number];
+	children: WorkspaceFolderTreeNode[];
+};
+
+function buildWorkspaceFolderTree(repos: NonNullable<WorkspaceSummary["workspaceRepos"]>): WorkspaceFolderTreeNode[] {
+	const roots: WorkspaceFolderTreeNode[] = [];
+	for (const repo of repos) {
+		const parts = repo.relativePath.split("/").filter(Boolean);
+		if (parts.length === 0) {
+			const rootRepo: WorkspaceFolderTreeNode = roots.find((candidate) => candidate.path === ".") ?? {
+				name: repo.name,
+				path: ".",
+				children: [],
+			};
+			if (!roots.includes(rootRepo)) roots.push(rootRepo);
+			rootRepo.repo = repo;
+			continue;
+		}
+		let nodes = roots;
+		let path = "";
+		for (const part of parts) {
+			path = path ? `${path}/${part}` : part;
+			let node = nodes.find((candidate) => candidate.path === path);
+			if (!node) {
+				node = { name: part, path, children: [] };
+				nodes.push(node);
+			}
+			nodes = node.children;
+		}
+		const leaf = findWorkspaceFolderNode(roots, path);
+		if (leaf) leaf.repo = repo;
+	}
+	return roots;
+}
+
+function findWorkspaceFolderNode(nodes: WorkspaceFolderTreeNode[], path: string): WorkspaceFolderTreeNode | undefined {
+	for (const node of nodes) {
+		if (node.path === path) return node;
+		const nested = findWorkspaceFolderNode(node.children, path);
+		if (nested) return nested;
+	}
+	return undefined;
+}
+
 type WorkspaceFolderBranchProps = {
 	workspace: WorkspaceSummary;
-	repo: NonNullable<WorkspaceSummary["workspaceRepos"]>[number];
+	node: WorkspaceFolderTreeNode;
+	allSessions: WorkspaceSession[];
 	sessions: WorkspaceSession[];
 	selection: Selection;
-	projectKey: string;
 	projectDragInProgress: boolean;
-	consumeDragClick: (id: string) => boolean;
 	onKilled: (session: WorkspaceSession) => void;
 	onOpenSession: (sessionId: string) => void;
 };
 
 const WorkspaceFolderBranch = memo(function WorkspaceFolderBranch({
 	workspace,
-	repo,
+	node,
+	allSessions,
 	sessions,
 	selection,
-	projectKey,
 	projectDragInProgress,
-	consumeDragClick,
 	onKilled,
 	onOpenSession,
 }: WorkspaceFolderBranchProps) {
 	const { t } = useTranslation();
-	const queryClient = useQueryClient();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
-	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	const isProjectRestarting = useUiStore((state) => state.restartingProjectIds.has(projectKey));
-	const isProjectProvisioning = useUiStore((state) => state.provisioningProjectIds.has(projectKey));
-	const [isSpawning, setIsSpawning] = useState(false);
-	const prefersReducedMotion = useReducedMotion();
-
-	const folderOrchestrator = newestActiveOrchestrator(workspace.sessions, repo.relativePath);
-	const canResumeOrchestrator = useCanResumeAgent(folderOrchestrator, workspace.hostId);
-
-	const isThisProject = selection.activeProjectId === workspace.id;
-	const folderBoardActive = isThisProject && !selection.activeSessionId && selection.activeFolder === repo.relativePath;
-	const folderOrchestratorActive = isThisProject && folderOrchestrator && selection.activeSessionId === folderOrchestrator.id;
-	const folderActive = folderBoardActive || Boolean(folderOrchestratorActive);
-
-	const folderNeedsInput = useMemo(() => sessions.some(sessionNeedsInput), [sessions]);
-
 	const [collapsed, setCollapsed] = useState(false);
-	const folderExpanded = !collapsed;
-
-	const orchestratorReply = useOrchestratorReplyState({
-		projectId: workspace.id,
-		hostId: workspace.hostId,
-		orchestrator: folderOrchestrator,
-		viewing: Boolean(folderOrchestratorActive),
-	});
-
-	const onFolderRowClick = () => {
-		if (consumeDragClick(repo.relativePath)) return;
-		if (!folderExpanded) {
-			setCollapsed(false);
-			selection.goProject(workspace.id, repo.relativePath);
-		} else if (folderBoardActive) {
-			setCollapsed(true);
-		} else {
-			selection.goProject(workspace.id, repo.relativePath);
-		}
-	};
-
-	const onToggleClick = (event: MouseEvent) => {
-		event.stopPropagation();
-		setCollapsed((prev) => !prev);
-	};
-
-	const openFolderOrchestrator = async () => {
-		if (isSpawning || isProjectProvisioning || isProjectRestarting) return;
-		if (collapsed) setCollapsed(false);
-		if (folderOrchestrator) {
-			if (canResumeOrchestrator && workspace.kind !== "cloud") {
-				setIsSpawning(true);
-				try {
-					const resume = resumeOrchestrator(folderOrchestrator.id, workspace.hostId);
-					selection.goSession(workspace.id, folderOrchestrator.id);
-					await resume;
-					await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(workspace.hostId) });
-					return;
-				} catch (err) {
-					console.error("Failed to resume folder orchestrator:", err);
-					showGlobalToast(
-						t("inspector.resumeAgent"),
-						err instanceof Error ? err.message : t("shell.couldNotSpawn"),
-						"error",
-					);
-					return;
-				} finally {
-					setIsSpawning(false);
-				}
-			}
-			selection.goSession(workspace.id, folderOrchestrator.id);
-			return;
-		}
-		if (workspace.shared) return;
-		setIsSpawning(true);
-		try {
-			const sessionId = await spawnOrchestrator(
-				workspace.id,
-				"sidebar",
-				false,
-				undefined,
-				undefined,
-				workspace.hostId,
-				repo.relativePath,
-			);
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(workspace.hostId) });
-			selection.goSession(workspace.id, sessionId);
-		} catch (err) {
-			console.error("Failed to spawn folder orchestrator:", err);
-			showGlobalToast(
-				t("shell.spawnOrchestratorLower"),
-				err instanceof Error ? err.message : t("shell.couldNotSpawn"),
-				"error",
-			);
-		} finally {
-			setIsSpawning(false);
-		}
-	};
-
-	const folderKey = `${projectKey}:${repo.relativePath}`;
-	const sessionIds = useMemo(() => sessions.map((s) => s.id), [sessions]);
+	const { listed, remaining, showMore } = useProgressiveShowMore(sessions);
+	const sessionIds = useMemo(() => listed.map((session) => session.id), [listed]);
+	const toggle = () => setCollapsed((value) => !value);
 
 	return (
-		<div className="relative mt-0.5" data-workspace-folder-branch={repo.relativePath}>
+		<div className="relative mt-0.5" data-workspace-folder-branch={node.path}>
 			<div className="group/nav-row group/folder-row relative flex h-7.5 w-full items-center">
 				<SidebarMenuButton
-					aria-label={`${repo.name} · ${workspace.name}`}
-					aria-current={folderBoardActive ? "page" : undefined}
-					aria-expanded={folderExpanded}
-					isActive={folderActive}
-					tooltip={`${repo.name} (${repo.relativePath})`}
-					onClick={onFolderRowClick}
+					aria-label={`${node.name} · ${workspace.name}`}
+					aria-expanded={!collapsed}
+					tooltip={node.path}
+					onClick={toggle}
 					className={cn(
 						NAV_ROW_CLASS,
 						NAV_ROW_HIGHLIGHT_HOST_CLASS,
-						"h-7.5 py-0 pl-4 pr-1 text-xs font-medium text-muted-foreground hover:text-foreground",
-						folderActive && "text-foreground",
+						"h-7.5 py-0 pl-4 pr-8 text-xs font-medium text-muted-foreground hover:text-foreground",
 					)}
 				>
-					<NavRowHighlight active={folderActive} />
-					<span
-						aria-hidden="true"
-						className="relative z-[1] inline-flex size-4 shrink-0 items-center justify-center cursor-pointer mr-0.5"
-						onClick={onToggleClick}
-					>
-						<ChevronRight
-							className={cn(
-								"size-3 transition-transform duration-150",
-								folderExpanded && "rotate-90",
-							)}
-						/>
+					<span aria-hidden="true" className="relative z-[1] inline-flex size-4 shrink-0 items-center justify-center mr-0.5">
+						<ChevronRight className={cn("size-3 transition-transform duration-150", !collapsed && "rotate-90")} />
 					</span>
-					<span
-						aria-hidden="true"
-						className="relative z-[1] inline-flex size-4 shrink-0 items-center justify-center mr-1 text-muted-foreground"
-					>
-						{!folderExpanded && folderNeedsInput ? (
-							<SessionMarkerIcon data-project-marker="attention" marker="attention" />
-						) : (
-							<Folder className="size-3.5" />
-						)}
-					</span>
+					<Folder className="relative z-[1] mr-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
 					<span className="relative z-[1] min-w-0 flex-1 truncate" data-folder-name="">
-						{repo.name}
+						{node.name}
 					</span>
 				</SidebarMenuButton>
-
-				{/* Trailing folder actions: Folder Orchestrator + New Task in folder */}
-				<div
-					className={cn(
-						"sidebar-expanded-chrome z-chrome absolute right-1 inset-y-0 flex items-center gap-0.5 opacity-0 group-hover/folder-row:opacity-100 group-focus-within/folder-row:opacity-100",
-						(folderOrchestratorActive || isSpawning) && "opacity-100",
-					)}
-					onClick={(event) => event.stopPropagation()}
-					onPointerDown={(event) => event.stopPropagation()}
-				>
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button
-								size="icon-xs"
-								variant="quiet"
-								aria-label={t("shell.newTask")}
-								className={cn(HOVER_ACTION_CLASS, "size-5 p-0")}
-								disabled={isProjectRestarting}
-								onClick={(e) => {
-									e.stopPropagation();
-									requestNewTask(workspace.id, workspace.hostId, { folder: repo.relativePath });
-								}}
-								type="button"
-							>
-								<Plus className="size-3" aria-hidden="true" />
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent>{t("shell.newTask")}</TooltipContent>
-					</Tooltip>
-
-					{!workspace.shared || folderOrchestrator ? (
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									size="icon-xs"
-									variant="quiet"
-									aria-current={folderOrchestratorActive ? "page" : undefined}
-									aria-label={orchestratorReplyLabel(
-										folderOrchestrator
-											? `${repo.name} ${t("shell.orchestrator")}`
-											: `${t("shell.spawnOrchestratorLower")} (${repo.name})`,
-										orchestratorReply,
-										t,
-									)}
-									className={cn(HOVER_ACTION_CLASS, "size-5 p-0", folderOrchestratorActive && "text-foreground")}
-									disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
-									onClick={(e) => {
-										e.stopPropagation();
-										void openFolderOrchestrator();
-									}}
-									type="button"
-								>
-									<OrchestratorReplyIcon
-										reply={orchestratorReply}
-										strokeWidth={folderOrchestratorActive ? 2.5 : 2}
-										surface="sidebar"
-									/>
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent>
-								{isProjectProvisioning || isProjectRestarting
-									? t("shell.restarting")
-									: isSpawning
-									? t("shell.spawning")
-									: folderOrchestrator
-									? orchestratorReplyLabel(`${repo.name} ${t("shell.orchestrator")}`, orchestratorReply, t)
-									: `${t("shell.spawnOrchestratorLower")} (${repo.name})`}
-							</TooltipContent>
-						</Tooltip>
-					) : null}
-				</div>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							size="icon-xs"
+							variant="quiet"
+							aria-label={`${t("shell.newTask")} · ${node.name}`}
+							className={cn(
+								HOVER_ACTION_CLASS,
+								"sidebar-expanded-chrome z-chrome absolute right-2 top-1/2 size-5 -translate-y-1/2 p-0 opacity-0 group-hover/folder-row:opacity-100 group-focus-within/folder-row:opacity-100",
+							)}
+							onClick={(event) => {
+								event.stopPropagation();
+								requestNewTask(workspace.id, workspace.hostId, { folder: node.path });
+							}}
+							type="button"
+						>
+							<Plus className="size-3" aria-hidden="true" />
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent>{t("shell.newTask")}</TooltipContent>
+				</Tooltip>
 			</div>
-
-			{/* Nested sessions in this folder */}
-			<AnimatePresence initial={false}>
-				{folderExpanded && sessions.length > 0 && (
-					<motion.div
-						initial={prefersReducedMotion ? false : { height: 0, opacity: 0 }}
-						animate={{ height: "auto", opacity: 1 }}
-						exit={prefersReducedMotion ? false : { height: 0, opacity: 0 }}
-						transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }}
-						style={{ overflow: "hidden" }}
-					>
-						<SessionReorderList
-							dndId={sessionDndId(folderKey)}
-							testId={`session-list-${folderKey}`}
-							className="mx-0 ml-6 translate-x-0 gap-px border-l-0 px-0 pt-0.5 pb-1"
-							sessions={sessions}
-							repos={[repo]}
-							sessionIds={sessionIds}
-							activeSessionId={selection.activeSessionId}
-							plain={projectDragInProgress}
-							onReorder={() => {}}
+			{!collapsed && (
+				<div className="pl-3.5">
+					{node.repo && sessions.length > 0 && (
+						<div className="relative">
+							<SessionReorderList
+								dndId={sessionDndId(`${workspace.id}-${node.path}`)}
+								testId={`session-list-${workspace.id}-${node.path}`}
+								className="mx-0 ml-3 translate-x-0 gap-px border-l-0 px-0 pt-0.5 pb-0"
+								sessions={listed}
+								repos={[node.repo]}
+								sessionIds={sessionIds}
+								activeSessionId={selection.activeSessionId}
+								plain={projectDragInProgress}
+								onReorder={() => {}}
+								onKilled={onKilled}
+								onOpen={onOpenSession}
+							/>
+							{remaining > 0 && (
+								<ShowMoreRow
+									className="absolute inset-x-0 bottom-0 z-20 h-5 bg-sidebar/75 px-3 backdrop-blur-[2px] shadow-sm"
+									expanded={false}
+									label={t("shell.showMore")}
+									onClick={showMore}
+								/>
+							)}
+						</div>
+					)}
+					{node.children.map((child) => (
+						<WorkspaceFolderBranch
+							key={child.path}
+							workspace={workspace}
+							allSessions={allSessions}
+							node={child}
+							sessions={child.repo
+								? allSessions.filter((session) => sessionMatchesWorkspaceFolder(
+									session,
+									child.path,
+									workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS,
+								))
+								: []}
+							selection={selection}
+							projectDragInProgress={projectDragInProgress}
 							onKilled={onKilled}
-							onOpen={onOpenSession}
+							onOpenSession={onOpenSession}
 						/>
-					</motion.div>
-				)}
-			</AnimatePresence>
+					))}
+				</div>
+			)}
 		</div>
 	);
 });
@@ -1906,6 +1818,13 @@ const ProjectItem = memo(function ProjectItem({
 	const rootSessions = useMemo(
 		() => (isMultiFolder ? sessions.filter((session) => !workspaceFolderRepoForSession(session, workspace.workspaceRepos)) : sessions),
 		[isMultiFolder, sessions, workspace.workspaceRepos],
+	);
+	const generalCap = useProgressiveShowMore(rootSessions);
+	const generalSessionIds = useStableArray(useMemo(() => generalCap.listed.map((session) => session.id), [generalCap.listed]));
+	const [generalOpen, setGeneralOpen] = useState(true);
+	const workspaceFolderTree = useMemo(
+		() => buildWorkspaceFolderTree(workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS),
+		[workspace.workspaceRepos],
 	);
 	// Publish the order shown here so keyboard navigation follows it.
 	useEffect(() => {
@@ -2518,48 +2437,47 @@ const ProjectItem = memo(function ProjectItem({
 						{isMultiFolder ? (
 							<>
 								{rootSessions.length > 0 && (
+									<SectionDisclosure
+										label="General"
+										open={generalOpen}
+										onToggle={() => setGeneralOpen((open) => !open)}
+										className="mb-0.5"
+									/>
+								)}
+								{generalOpen && rootSessions.length > 0 && (
+									<div className="relative">
 									<SessionReorderList
 										dndId={sessionDndId(`${projectKey}-root`)}
 										testId={`session-list-${projectKey}-root`}
-										className={cn(
-											"mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1 pb-1",
-										)}
-										sessions={listedSessions}
+										className="mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1 pb-1"
+										sessions={generalCap.listed}
 										repos={workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS}
-										sessionIds={listedSessionIds}
+										sessionIds={generalSessionIds}
 										activeSessionId={selection.activeSessionId}
 										plain={projectDragInProgress}
 										onReorder={commitSessionOrder}
 										onKilled={handleSessionKilled}
 										onOpen={openSession}
 									/>
-								)}
-								{hiddenSessionCount > 0 ? (
-									<div className="pl-4">
+										{generalCap.remaining > 0 && (
 										<ShowMoreRow
-											className="px-3"
-											expanded={showAllSessions}
-											label={
-												showAllSessions
-													? t("shell.showLessAgents")
-													: t("shell.showMoreAgents", { count: hiddenSessionCount })
-											}
-											onClick={toggleShowAllSessions}
+											className="absolute inset-x-0 bottom-0 z-20 h-5 bg-sidebar/75 px-3 backdrop-blur-[2px] shadow-sm"
+											expanded={false}
+											label={t("shell.showMore")}
+											onClick={generalCap.showMore}
 										/>
-									</div>
-								) : null}
-								{workspace.workspaceRepos?.map((repo) => (
-									<WorkspaceFolderBranch
-										key={repo.relativePath}
-										workspace={workspace}
-										repo={repo}
-										sessions={sessions.filter((session) =>
-											sessionMatchesWorkspaceFolder(session, repo.relativePath, workspace.workspaceRepos),
 										)}
+									</div>
+								)}
+								{workspaceFolderTree.map((node) => (
+									<WorkspaceFolderBranch
+										key={node.path}
+										workspace={workspace}
+										node={node}
+										allSessions={sessions}
+										sessions={node.repo ? sessions.filter((session) => sessionMatchesWorkspaceFolder(session, node.path, workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS)) : []}
 										selection={selection}
-										projectKey={projectKey}
 										projectDragInProgress={projectDragInProgress}
-										consumeDragClick={consumeDragClick}
 										onKilled={handleSessionKilled}
 										onOpenSession={openSession}
 									/>

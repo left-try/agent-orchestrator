@@ -4970,13 +4970,15 @@ describe("Memoized Sidebar with unchanged props", () => {
 
 			renderSidebar({ workspaces: [multiFolderWorkspace] });
 
-			// Root session rendered at project level
+			// Unassigned workspace chats sit inside a plain General dropdown.
 			expect(screen.getByText("Root workspace task")).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "General" })).toBeInTheDocument();
 
 			// No folder filter dropdown
 			expect(screen.queryByLabelText("Folder")).not.toBeInTheDocument();
 
-			// Folders rendered directly inside workspace
+			// Nested folder paths render as a hierarchy.
+			expect(screen.getByRole("button", { name: "services · Mono Repo" })).toBeInTheDocument();
 			const apiBranch = screen.getByRole("button", { name: "api · Mono Repo" });
 			const webBranch = screen.getByRole("button", { name: "web · Mono Repo" });
 			expect(apiBranch).toBeInTheDocument();
@@ -4989,16 +4991,12 @@ describe("Memoized Sidebar with unchanged props", () => {
 			// No folder markers rendered on chat rows
 			expect(document.querySelector("[data-workspace-folder]")).not.toBeInTheDocument();
 
-			// Clicking folder row navigates to /projects/$projectId?folder=<relativePath>
+			// Folder rows only expand/collapse; the project board remains project-wide.
 			fireEvent.click(apiBranch);
-			expect(navigateMock).toHaveBeenCalledWith({
-				to: "/projects/$projectId",
-				params: { projectId: "mf-workspace" },
-				search: { folder: "services/api" },
-			});
+			expect(navigateMock).not.toHaveBeenCalledWith(expect.objectContaining({ search: { folder: "services/api" } }));
 		});
 
-		it("folder actions trigger folder new task and folder orchestrator spawn", async () => {
+		it("folder actions create a task for that folder without adding a folder orchestrator", async () => {
 			const multiFolderWorkspace: WorkspaceSummary = {
 				id: "mf-workspace",
 				name: "Mono Repo",
@@ -5017,26 +5015,37 @@ describe("Memoized Sidebar with unchanged props", () => {
 			expect(branch).toBeInTheDocument();
 
 			// Click folder + button -> requests new task with folder option
-			const newTaskBtn = within(branch as HTMLElement).getByRole("button", { name: "New task" });
+			const newTaskBtn = within(branch as HTMLElement).getByRole("button", { name: /New task/ });
 			fireEvent.click(newTaskBtn);
 			expect(useUiStore.getState().newTaskRequest?.folder).toBe("services/api");
 			expect(useUiStore.getState().newTaskRequest?.projectId).toBe("mf-workspace");
 
-			// Click folder orchestrator button -> spawns folder orchestrator
-			spawnMock.mockResolvedValueOnce("orch-api-1");
-			const spawnOrchBtn = within(branch as HTMLElement).getByRole("button", { name: "spawn orchestrator (api)" });
-			fireEvent.click(spawnOrchBtn);
-			await waitFor(() => {
-				expect(spawnMock).toHaveBeenCalledWith(
-					"mf-workspace",
-					"sidebar",
-					false,
-					undefined,
-					undefined,
-					undefined,
-					"services/api",
-				);
-			});
+			expect(within(branch as HTMLElement).queryByRole("button", { name: /orchestrator/i })).not.toBeInTheDocument();
+		});
+
+		it("reveals five folder chats first, then ten and twenty on successive clicks", async () => {
+			const folderChats = Array.from({ length: 26 }, (_, index) => ({
+				...session,
+				id: `folder-chat-${index + 1}`,
+				title: `Folder chat ${index + 1}`,
+				workspaceFolder: "services/api",
+			}));
+			const multiFolderWorkspace: WorkspaceSummary = {
+				id: "mf-workspace",
+				name: "Mono Repo",
+				path: "/repo/mono",
+				kind: "workspace",
+				workspaceRepos: [{ name: "api", relativePath: "services/api", repo: "acme/api" }],
+				sessions: folderChats,
+			};
+			renderSidebar({ workspaces: [multiFolderWorkspace] });
+			expect(screen.getByText("Folder chat 5")).toBeInTheDocument();
+			expect(screen.getByText("Folder chat 6")).toBeInTheDocument(); // dimmed under Show more
+			await userEvent.click(screen.getByRole("button", { name: /^Show more/ }));
+			expect(screen.getByText("Folder chat 15")).toBeInTheDocument();
+			expect(screen.getByText("Folder chat 16")).toBeInTheDocument(); // next partially covered row
+			await userEvent.click(screen.getByRole("button", { name: /^Show more/ }));
+			expect(screen.getByText("Folder chat 26")).toBeInTheDocument();
 		});
 	});
 });
