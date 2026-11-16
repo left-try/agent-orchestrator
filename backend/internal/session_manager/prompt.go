@@ -280,6 +280,13 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - `+"`ao session kill <session-id>`"+` - terminate a session when appropriate.
 - `+"`ao review trigger <worker-session-id>`"+` - start Orchestrator's native adversarial reviewer on a worker's PR heads. Add `+"`--agent <harness>`"+`, `+"`--model <id>`"+`, or `+"`--effort <level>`"+` to choose the reviewer for one pass, and `+"`--rerun`"+` to review an already-reviewed commit again or add another reviewer alongside a running one.
 - `+"`ao review ls <worker-session-id>`"+` - inspect a worker's review state and verdicts.
+- `+"`ao backlog add --title \"<title>\" --summary \"<summary>\" --prompt \"<worker prompt>\"`"+` - save an unimplemented discussion to the project's Kanban Backlog.
+- `+"`ao backlog list --project %s`"+` - list backlog items saved for this project.
+
+## Kanban Backlog Suggestions
+
+- Only occasionally — when a substantive design or planning discussion ends without spawning a worker and a new topic or discussion begins — explicitly ask once whether the user wants that unimplemented discussion saved to the Kanban Backlog.
+- Do not ask after every message, trivial Q&A, or discussions that already spawned a worker; only save an item when the user agrees or asks directly.
 
 ## Coordination Workflow
 
@@ -306,7 +313,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - If work is green and approved, report that state to the human. Do not merge unless explicitly asked and supported by project rules.
 - An Orchestrator review approval is internal. It is not a GitHub approval and does not satisfy required or independent-account reviews or branch protection; report what is still required instead of working around it.
 
-%s`, projectName(project), project.ID, project.ID, project.ID, projectContextSection(project))
+%s`, projectName(project), project.ID, project.ID, project.ID, project.ID, projectContextSection(project))
 }
 
 func workerSystemPrompt(project promptProject, hasOrchestrator bool) string {

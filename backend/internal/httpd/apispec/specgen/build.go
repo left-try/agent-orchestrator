@@ -104,6 +104,8 @@ func Build() ([]byte, error) {
 			"Server-side unfurl of external links for the CSP-locked renderer"),
 		*(&openapi31.Tag{Name: "github"}).WithDescription(
 			"Local GitHub personal access token storage and repository listing"),
+		*(&openapi31.Tag{Name: "backlog"}).WithDescription(
+			"Project Kanban backlog items saved from unimplemented orchestrator discussions"),
 	}
 
 	for _, op := range operations() {
@@ -219,6 +221,9 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateVersionRefreshRequest":               "UpdateVersionRefreshRequest",
 	"ControllersUpdateComputerUseRequest":                  "UpdateComputerUseRequest",
 	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
+	"DomainKanbanSettings":                                 "KanbanSettings",
+	"DomainKanbanColumnPreference":                         "KanbanColumnPreference",
+	"ControllersUpdateKanbanSettingsRequest":               "UpdateKanbanSettingsRequest",
 	"ControllersUpdateAccountHandoffRequest":               "UpdateAccountHandoffRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
@@ -634,6 +639,17 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersInvokeCueRequest":     "InvokeCueRequest",
 	"ControllersInvokeCueResponse":    "InvokeCueResponse",
 	"ControllersCueEnvelope":          "CueEnvelope",
+	// httpd/controllers — project backlog wire envelopes
+	"ControllersBacklogIDParam":              "BacklogIDParam",
+	"ControllersBacklogProjectIDParam":       "BacklogProjectIDParam",
+	"ControllersBacklogListQuery":            "BacklogListQuery",
+	"ControllersCreateBacklogItemRequest":    "CreateBacklogItemRequest",
+	"ControllersUpdateBacklogItemRequest":    "UpdateBacklogItemRequest",
+	"ControllersImplementBacklogItemRequest": "ImplementBacklogItemRequest",
+	"ControllersBacklogItemResponse":         "BacklogItemResponse",
+	"ControllersBacklogItemEnvelope":         "BacklogItemEnvelope",
+	"ControllersListBacklogResponse":         "ListBacklogResponse",
+	"ControllersImplementBacklogItemResponse": "ImplementBacklogItemResponse",
 	// httpd/controllers — PR wire envelopes
 	"ControllersMergePRRequest":             "MergePRRequest",
 	"ControllersPRStackLayerResponse":       "PRStackLayerResponse",
@@ -848,6 +864,7 @@ func operations() []operation {
 	ops = append(ops, paneOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
 	ops = append(ops, cueOperations()...)
+	ops = append(ops, backlogOperations()...)
 	ops = append(ops, systemOperations()...)
 	ops = append(ops, computerUseOperations()...)
 	ops = append(ops, identityOperations()...)
@@ -1443,6 +1460,17 @@ func shellTerminalOperations() []operation {
 			method: http.MethodPatch, path: "/api/v1/settings/account-handoff", id: "updateAccountHandoff", tag: "settings",
 			summary: "Choose whether a usage-limited Chat session moves to another account and retries its prompt",
 			reqBody: controllers.UpdateAccountHandoffRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/settings/kanban", id: "updateKanbanSettings", tag: "settings",
+			summary: "Customize Kanban board columns and merged PR routing",
+			reqBody: controllers.UpdateKanbanSettingsRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
@@ -2206,6 +2234,97 @@ func cueOperations() []operation {
 				{http.StatusRequestEntityTooLarge, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+	}
+}
+
+func backlogOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/backlog", id: "listBacklogItems", tag: "backlog",
+			summary:    "List backlog items across projects or filtered by project",
+			pathParams: []any{controllers.BacklogListQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ListBacklogResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/projects/{projectId}/backlog", id: "listProjectBacklog", tag: "backlog",
+			summary:    "List backlog items for a project",
+			pathParams: []any{controllers.BacklogProjectIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ListBacklogResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/projects/{projectId}/backlog", id: "createBacklogItem", tag: "backlog",
+			summary:    "Save an unimplemented discussion to the project backlog",
+			pathParams: []any{controllers.BacklogProjectIDParam{}},
+			reqBody:    controllers.CreateBacklogItemRequest{},
+			resps: []respUnit{
+				{http.StatusCreated, controllers.BacklogItemEnvelope{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusRequestEntityTooLarge, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/backlog/{backlogId}", id: "getBacklogItem", tag: "backlog",
+			summary:    "Get a backlog item",
+			pathParams: []any{controllers.BacklogIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.BacklogItemEnvelope{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/backlog/{backlogId}", id: "updateBacklogItem", tag: "backlog",
+			summary:    "Update a backlog item",
+			pathParams: []any{controllers.BacklogIDParam{}},
+			reqBody:    controllers.UpdateBacklogItemRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.BacklogItemEnvelope{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusRequestEntityTooLarge, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/backlog/{backlogId}", id: "deleteBacklogItem", tag: "backlog",
+			summary:    "Delete a backlog item",
+			pathParams: []any{controllers.BacklogIDParam{}},
+			resps: []respUnit{
+				{http.StatusNoContent, nil},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/backlog/{backlogId}/implement", id: "implementBacklogItem", tag: "backlog",
+			summary:    "Spawn a worker session from a backlog item and mark it implemented",
+			pathParams: []any{controllers.BacklogIDParam{}},
+			reqBody:    controllers.ImplementBacklogItemRequest{}, optionalReqBody: true,
+			resps: []respUnit{
+				{http.StatusOK, controllers.ImplementBacklogItemResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusRequestEntityTooLarge, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},

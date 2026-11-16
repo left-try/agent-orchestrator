@@ -30,6 +30,7 @@ type Store interface {
 	SetComputerUse(ctx context.Context, enabled bool, now time.Time) error
 	SetSessionRetentionDays(ctx context.Context, days int, now time.Time) error
 	SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error
+	SetKanbanSettings(ctx context.Context, settings domain.KanbanSettings, now time.Time) error
 }
 
 // Snapshot is the current preference set.
@@ -48,6 +49,7 @@ type Snapshot struct {
 	// default, keeps it.
 	SessionRetentionDays int
 	AccountHandoff       bool
+	Kanban               domain.KanbanSettings
 	UpdatedAt            time.Time
 }
 
@@ -137,6 +139,11 @@ func (s *Service) Get(ctx context.Context) (Snapshot, error) {
 	snapshot.ChatHibernationEnabled = s.chatHibernation.Load()
 	if err == nil {
 		s.cacheVersionRefresh(snapshot.VersionRefresh)
+		if len(snapshot.Kanban.Columns) == 0 {
+			snapshot.Kanban = domain.DefaultKanbanSettings()
+		} else {
+			snapshot.Kanban = domain.NormalizeKanbanSettings(snapshot.Kanban)
+		}
 	}
 	return snapshot, err
 }
@@ -150,6 +157,18 @@ func (s *Service) AccountHandoffEnabled(ctx context.Context) bool {
 // SetAccountHandoff turns the usage-limit account handoff on or off.
 func (s *Service) SetAccountHandoff(ctx context.Context, enabled bool) (Snapshot, error) {
 	if err := s.store.SetAccountHandoff(ctx, enabled, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.Get(ctx)
+}
+
+// SetKanbanSettings validates and stores Kanban board customization preferences.
+func (s *Service) SetKanbanSettings(ctx context.Context, settings domain.KanbanSettings) (Snapshot, error) {
+	validated, err := domain.ValidateKanbanSettings(settings)
+	if err != nil {
+		return Snapshot{}, apierr.Invalid("KANBAN_SETTINGS_INVALID", err.Error(), nil)
+	}
+	if err := s.store.SetKanbanSettings(ctx, validated, s.now()); err != nil {
 		return Snapshot{}, err
 	}
 	return s.Get(ctx)

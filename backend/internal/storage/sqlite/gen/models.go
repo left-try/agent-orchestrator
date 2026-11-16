@@ -188,6 +188,7 @@ type AppSetting struct {
 	SessionRetentionDays int64
 	AccountHandoff       bool
 	LimitHistory         bool
+	KanbanConfig         string
 }
 
 type Automation struct {
@@ -230,6 +231,19 @@ type AutomationRun struct {
 type AwakeState struct {
 	ID       int64
 	Document string
+}
+
+type BacklogItem struct {
+	ID                    domain.BacklogItemID
+	ProjectID             domain.ProjectID
+	OrchestratorSessionID string
+	Title                 string
+	Summary               string
+	Prompt                string
+	Status                domain.BacklogItemStatus
+	SpawnedSessionID      string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 type ChangeLog struct {

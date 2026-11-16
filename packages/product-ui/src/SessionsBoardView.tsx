@@ -124,14 +124,20 @@ export type SessionsBoardGridViewProps<
 	TSession extends BoardSessionPresentation = BoardSessionPresentation,
 > = {
 	columns: KanbanColumnView[];
+	columnCountOverride?: (column: KanbanColumn) => number | undefined;
+	columnHeaderAction?: (column: KanbanColumnView) => ReactNode;
 	labels: BoardColumnLabels;
+	renderColumnContent?: (column: KanbanColumnView) => ReactNode;
 	renderSessionCard: (session: TSession) => ReactNode;
 	sessions: TSession[];
 };
 
 export function SessionsBoardGridView<TSession extends BoardSessionPresentation>({
 	columns,
+	columnCountOverride,
+	columnHeaderAction,
 	labels,
+	renderColumnContent,
 	renderSessionCard,
 	sessions,
 }: SessionsBoardGridViewProps<TSession>) {
@@ -143,25 +149,42 @@ export function SessionsBoardGridView<TSession extends BoardSessionPresentation>
 		else byColumn.set(column, [session]);
 	}
 
+	const columnCount = Math.max(columns.length, 1);
+
 	return (
 		<div
 			className="board-horizontal-scrollbar h-full overflow-x-auto overflow-y-hidden"
 			data-testid="board-horizontal-scroll"
 		>
-			<div className="relative grid h-full min-w-[64rem] grid-cols-4 divide-x divide-border-strong xl:min-w-0">
+			<div
+				className={cn(
+					"relative grid h-full divide-x divide-border-strong",
+					columnCount <= 5 && "xl:min-w-0",
+				)}
+				style={{
+					gridTemplateColumns: `repeat(${columnCount}, minmax(15rem, 1fr))`,
+					minWidth: `${columnCount * 15}rem`,
+				}}
+			>
 				<div
 					aria-hidden="true"
 					className="pointer-events-none absolute inset-x-0 top-12 z-10 border-t border-border-strong"
 				/>
-				{columns.map((column) => (
-					<BoardColumnView
-						column={column}
-						key={column.column}
-						labels={labels}
-						renderSessionCard={renderSessionCard}
-						sessions={byColumn.get(column.column) ?? []}
-					/>
-				))}
+				{columns.map((column) => {
+					const laneSessions = byColumn.get(column.column) ?? [];
+					return (
+						<BoardColumnView
+							column={column}
+							countOverride={columnCountOverride?.(column.column)}
+							customContent={renderColumnContent?.(column)}
+							headerAction={columnHeaderAction?.(column)}
+							key={column.column}
+							labels={labels}
+							renderSessionCard={renderSessionCard}
+							sessions={laneSessions}
+						/>
+					);
+				})}
 			</div>
 		</div>
 	);
@@ -169,11 +192,17 @@ export function SessionsBoardGridView<TSession extends BoardSessionPresentation>
 
 function BoardColumnView<TSession extends BoardSessionPresentation>({
 	column,
+	countOverride,
+	customContent,
+	headerAction,
 	labels,
 	renderSessionCard,
 	sessions,
 }: {
 	column: KanbanColumnView;
+	countOverride?: number;
+	customContent?: ReactNode;
+	headerAction?: ReactNode;
 	labels: BoardColumnLabels;
 	renderSessionCard: (session: TSession) => ReactNode;
 	sessions: TSession[];
@@ -183,6 +212,7 @@ function BoardColumnView<TSession extends BoardSessionPresentation>({
 			Number(boardSessionNeedsAttention(right)) - Number(boardSessionNeedsAttention(left));
 		return attentionPriority || right.updatedAt.localeCompare(left.updatedAt);
 	});
+	const count = countOverride ?? ordered.length;
 	return (
 		<section
 			aria-label={labels.columnAria(column.label)}
@@ -196,16 +226,21 @@ function BoardColumnView<TSession extends BoardSessionPresentation>({
 					className="size-[var(--size-swatch)] rounded-full"
 					style={{ backgroundColor: column.dot }}
 				/>
-				<span className={cn("text-xs font-medium", column.titleClassName)}>
+				<span className={cn("truncate text-xs font-medium", column.titleClassName)}>
 					{column.label}
 				</span>
-				<span className="ml-auto tabular-nums text-xs leading-none text-passive">{ordered.length}</span>
+				<div className="ml-auto flex shrink-0 items-center gap-2">
+					{headerAction}
+					<span className="tabular-nums text-xs leading-none text-passive">{count}</span>
+				</div>
 			</div>
 			<div className="board-scrollbar min-h-0 flex-1 overflow-y-auto pl-3 pr-2 pb-3 pt-3">
 				<div className="flex min-h-full flex-col gap-2.5">
-					{ordered.map((session) => (
-						<Fragment key={session.id}>{renderSessionCard(session)}</Fragment>
-					))}
+					{customContent !== undefined
+						? customContent
+						: ordered.map((session) => (
+								<Fragment key={session.id}>{renderSessionCard(session)}</Fragment>
+							))}
 				</div>
 			</div>
 		</section>

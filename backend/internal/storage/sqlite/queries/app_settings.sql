@@ -36,3 +36,6 @@ WHERE id = 1;
 
 -- name: SetAccountHandoff :exec
 UPDATE app_settings SET account_handoff = ?, updated_at = ? WHERE id = 1;
+
+-- name: SetKanbanConfig :exec
+UPDATE app_settings SET kanban_config = ?, updated_at = ? WHERE id = 1;

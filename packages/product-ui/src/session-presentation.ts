@@ -53,6 +53,7 @@ const englishLabels: Record<SessionPresentationMessageKey, string> = {
 	"zone.pending": "In review",
 	"zone.working": "Working",
 	"zone.done": "Terminated",
+	"column.backlog": "Backlog",
 	"column.building": "Building",
 	"column.validating": "Validating",
 	// Deliberate: this lane is the review-feedback loop, not a queue of PRs
@@ -65,6 +66,7 @@ const englishLabels: Record<SessionPresentationMessageKey, string> = {
 	// different wording later is one string per locale.
 	"column.needs_review": "In review",
 	"column.ready": "Ready",
+	"column.done": "Done",
 	"column.archive": "Archive",
 	"timeline.no_signal": "No Signal",
 	"timeline.ci_failed": "CI Failed",
@@ -334,8 +336,7 @@ export const boardAttentionZoneOrder: AttentionZone[] = ["working", "action", "p
 
 /**
  * Board lanes in delivery order: building -> validating -> in review ->
- * ready. The middle two are the same review-feedback loop seen from either
- * side: validating while AO turns it, in review while a person does.
+ * ready -> done. `backlog` is opt-in and added by board customization settings.
  * `archive` is deliberately absent — terminated sessions render in the archive
  * sheet, not as a lane.
  */
@@ -344,6 +345,16 @@ export const boardKanbanColumnOrder: KanbanColumn[] = [
 	"validating",
 	"needs_review",
 	"ready",
+	"done",
+];
+
+export const allConfigurableKanbanColumns: KanbanColumn[] = [
+	"backlog",
+	"building",
+	"validating",
+	"needs_review",
+	"ready",
+	"done",
 ];
 
 /**
@@ -388,6 +399,15 @@ type KanbanColumnBase = Omit<KanbanColumnView, "label"> & {
 };
 
 const kanbanColumnBases: Record<KanbanColumn, KanbanColumnBase> = {
+	backlog: {
+		column: "backlog",
+		labelKey: "column.backlog",
+		glow: "var(--color-overlay-faint)",
+		dot: "var(--color-status-idle)",
+		dotGlow: false,
+		titleClassName: "text-muted-foreground",
+		dotClassName: "bg-status-idle",
+	},
 	building: {
 		column: "building",
 		labelKey: "column.building",
@@ -423,6 +443,15 @@ const kanbanColumnBases: Record<KanbanColumn, KanbanColumnBase> = {
 		dotGlow: true,
 		titleClassName: "text-status-ready",
 		dotClassName: "bg-status-ready",
+	},
+	done: {
+		column: "done",
+		labelKey: "column.done",
+		glow: "color-mix(in srgb, var(--color-status-merged) 7%, transparent)",
+		dot: "var(--color-status-merged)",
+		dotGlow: false,
+		titleClassName: "text-status-merged",
+		dotClassName: "bg-status-merged",
 	},
 	archive: {
 		column: "archive",

@@ -15,6 +15,64 @@ import type { SessionMode } from "../types/workspace";
 /** `disabledModels` lists the models pickers leave out; empty or unset means every catalog model. */
 export type HarnessDefault = Pick<components["schemas"]["HarnessDefault"], "disabledModels">;
 
+export type KanbanColumnId = "backlog" | "building" | "validating" | "needs_review" | "ready" | "done";
+
+export interface KanbanColumnPreference {
+	id: KanbanColumnId;
+	enabled: boolean;
+	label?: string;
+}
+
+export interface KanbanSettings {
+	moveMergedToDone: boolean;
+	columns: KanbanColumnPreference[];
+}
+
+export const DEFAULT_KANBAN_COLUMNS: readonly KanbanColumnPreference[] = [
+	{ id: "backlog", enabled: false },
+	{ id: "building", enabled: true },
+	{ id: "validating", enabled: true },
+	{ id: "needs_review", enabled: true },
+	{ id: "ready", enabled: true },
+	{ id: "done", enabled: true },
+];
+
+export function defaultKanbanSettings(): KanbanSettings {
+	return {
+		moveMergedToDone: true,
+		columns: DEFAULT_KANBAN_COLUMNS.map((column) => ({ ...column })),
+	};
+}
+
+const VALID_KANBAN_COLUMN_IDS = new Set<KanbanColumnId>(
+	DEFAULT_KANBAN_COLUMNS.map((column) => column.id),
+);
+
+export function normalizeKanbanSettings(input?: Partial<KanbanSettings> | null): KanbanSettings {
+	const defaults = defaultKanbanSettings();
+	if (!input) return defaults;
+	const seen = new Set<KanbanColumnId>();
+	const columns: KanbanColumnPreference[] = [];
+	for (const entry of input.columns ?? []) {
+		if (!entry || !VALID_KANBAN_COLUMN_IDS.has(entry.id) || seen.has(entry.id)) continue;
+		seen.add(entry.id);
+		const label = entry.label?.trim();
+		columns.push({
+			id: entry.id,
+			enabled: Boolean(entry.enabled),
+			...(label ? { label } : {}),
+		});
+	}
+	for (const fallback of DEFAULT_KANBAN_COLUMNS) {
+		if (seen.has(fallback.id)) continue;
+		columns.push({ ...fallback });
+	}
+	return {
+		moveMergedToDone: input.moveMergedToDone ?? defaults.moveMergedToDone,
+		columns,
+	};
+}
+
 export const settingsQueryKey = ["settings"] as const;
 
 export interface Settings {
@@ -40,9 +98,34 @@ export interface Settings {
 	/** Days an archived session with a released worktree is kept before the daemon deletes it; 0 keeps it. */
 	sessionRetentionDays?: number;
 	accountHandoff?: boolean;
+	/** Board column visibility, ordering, labels, and merged-PR routing. */
+	kanban?: KanbanSettings;
 }
 
 const settingsReadTimeoutMs = 10_000;
+
+function mapSettingsResponse(data?: Partial<components["schemas"]["SettingsResponse"]>): Settings {
+	return {
+		defaultSessionMode: (data?.defaultSessionMode ?? "tui") as SessionMode,
+		harnessDefaults: data?.harnessDefaults ?? {},
+		chatHarnesses: data?.chatHarnesses ?? [],
+		client: data?.client ?? "",
+		// Offering gates fail closed for cloud and open for local, so a daemon
+		// that predates them behaves like a plain local install.
+		localEnabled: data?.localEnabled ?? true,
+		cloudEnabled: data?.cloudEnabled ?? false,
+		cloudControlPlaneUrl: data?.cloudControlPlaneUrl ?? "",
+		trackerIntakeEnabled: data?.trackerIntakeEnabled ?? false,
+		// A daemon that predates the setting never moves sessions.
+		versionRefresh: data?.versionRefresh ?? false,
+		// A daemon that predates the setting never adds the instruction.
+		computerUse: data?.computerUse ?? false,
+		// Absent on a daemon that predates retention, which keeps every session.
+		sessionRetentionDays: data?.sessionRetentionDays,
+		accountHandoff: data?.accountHandoff ?? false,
+		kanban: normalizeKanbanSettings(data?.kanban),
+	};
+}
 
 export function useSettings(hostId?: string, enabled = true) {
 	const query = useQuery({
@@ -61,29 +144,16 @@ export function useSettings(hostId?: string, enabled = true) {
 			// sit queued behind them. Bound it: a read that never completes would
 			// otherwise hold the query in loading, with no retry or refetch, until
 			// the app restarts.
-			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/settings", {
+			const client = hostId ? clientForHost(hostId) : apiClient;
+			if (typeof client?.GET !== "function") {
+				return mapSettingsResponse(undefined);
+			}
+			const response = await client.GET("/api/v1/settings", {
 				signal: AbortSignal.any([signal, AbortSignal.timeout(settingsReadTimeoutMs)]),
 			});
+			const { data, error } = response ?? {};
 			if (error) throw error;
-			return {
-				defaultSessionMode: (data?.defaultSessionMode ?? "tui") as SessionMode,
-				harnessDefaults: data?.harnessDefaults ?? {},
-				chatHarnesses: data?.chatHarnesses ?? [],
-				client: data?.client ?? "",
-				// Offering gates fail closed for cloud and open for local, so a daemon
-				// that predates them behaves like a plain local install.
-				localEnabled: data?.localEnabled ?? true,
-				cloudEnabled: data?.cloudEnabled ?? false,
-				cloudControlPlaneUrl: data?.cloudControlPlaneUrl ?? "",
-				trackerIntakeEnabled: data?.trackerIntakeEnabled ?? false,
-				// A daemon that predates the setting never moves sessions.
-				versionRefresh: data?.versionRefresh ?? false,
-				// A daemon that predates the setting never adds the instruction.
-				computerUse: data?.computerUse ?? false,
-				// Absent on a daemon that predates retention, which keeps every session.
-				sessionRetentionDays: data?.sessionRetentionDays,
-				accountHandoff: data?.accountHandoff ?? false,
-			};
+			return mapSettingsResponse(data);
 		},
 	});
 
@@ -216,5 +286,35 @@ export function useUpdateComputerUse() {
 		update: (enabled: boolean) => mutation.mutate(enabled),
 		saving: mutation.isPending,
 		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
+	};
+}
+
+export function useUpdateKanbanSettings(hostId?: string) {
+	const queryClient = useQueryClient();
+	const key = hostId ? ["settings", hostId] : settingsQueryKey;
+	const mutation = useMutation({
+		mutationFn: async (next: KanbanSettings) => {
+			const normalized = normalizeKanbanSettings(next);
+			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).PATCH("/api/v1/settings/kanban", {
+				body: normalized,
+			});
+			if (error) throw error;
+			return data;
+		},
+		onSuccess: async (data) => {
+			if (data?.kanban) {
+				queryClient.setQueryData<Settings>(key, (current) =>
+					current ? { ...current, kanban: normalizeKanbanSettings(data.kanban) } : mapSettingsResponse(data),
+				);
+			}
+			await queryClient.invalidateQueries({ queryKey: key, exact: true });
+		},
+	});
+
+	return {
+		update: mutation.mutateAsync,
+		saving: mutation.isPending,
+		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
+		reset: mutation.reset,
 	};
 }

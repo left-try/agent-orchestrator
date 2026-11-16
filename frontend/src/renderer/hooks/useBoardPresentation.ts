@@ -9,12 +9,14 @@ export function useBoardPresentation({
 	isError,
 	hasProjects,
 	hasWorkerSessions,
+	hasBacklogContent = false,
 }: {
 	projectId?: string;
 	isSuccess: boolean;
 	isError: boolean;
 	hasProjects: boolean;
 	hasWorkerSessions: boolean;
+	hasBacklogContent?: boolean;
 }) {
 	const shell = useShellMaybe();
 	const { blocked: requirementsBlocked } = useSystemRequirementsGate();
@@ -31,6 +33,6 @@ export function useBoardPresentation({
 		showStartup,
 		workspaceStartupState,
 		showWelcome: !projectId && isLoaded && !hasProjects,
-		showProjectEmpty: projectId !== undefined && isLoaded && hasProjects && !hasVisibleWorkers,
+		showProjectEmpty: projectId !== undefined && isLoaded && hasProjects && !hasVisibleWorkers && !hasBacklogContent,
 	};
 }
