@@ -2875,6 +2875,75 @@ type CueEnvelope struct {
 	Cue CueResponse `json:"cue"`
 }
 
+// BacklogIDParam is the {backlogId} path parameter of the /backlog/{backlogId} routes.
+type BacklogIDParam struct {
+	BacklogID string `path:"backlogId" description:"Backlog item identifier."`
+}
+
+// BacklogProjectIDParam is the {projectId} path parameter of /projects/{projectId}/backlog.
+type BacklogProjectIDParam struct {
+	ProjectID string `path:"projectId" description:"Project owning the backlog items."`
+}
+
+// BacklogListQuery filters GET /api/v1/backlog by project when supplied.
+type BacklogListQuery struct {
+	ProjectID string `query:"projectId" description:"Optional project id filter."`
+}
+
+// CreateBacklogItemRequest creates a backlog item captured from an unimplemented discussion.
+type CreateBacklogItemRequest struct {
+	OrchestratorSessionID string `json:"orchestratorSessionId,omitempty" description:"Optional orchestrator session id where the discussion took place."`
+	Title                 string `json:"title" maxLength:"160" description:"Short summary title for the backlog card."`
+	Summary               string `json:"summary,omitempty" maxLength:"4096" description:"Notes or context summarizing the unimplemented discussion."`
+	Prompt                string `json:"prompt,omitempty" maxLength:"16384" description:"Optional implementation prompt to pass when spawning a worker; defaults to summary or title."`
+}
+
+// UpdateBacklogItemRequest updates an existing backlog item.
+type UpdateBacklogItemRequest struct {
+	Title   string `json:"title,omitempty" maxLength:"160"`
+	Summary string `json:"summary,omitempty" maxLength:"4096"`
+	Prompt  string `json:"prompt,omitempty" maxLength:"16384"`
+	Status  string `json:"status,omitempty" enum:"open,implemented"`
+}
+
+// ImplementBacklogItemRequest optionally configures the spawned worker session.
+type ImplementBacklogItemRequest struct {
+	Harness       string `json:"harness,omitempty"`
+	Model         string `json:"model,omitempty"`
+	InterfaceMode string `json:"interfaceMode,omitempty" enum:"chat,tui"`
+	Async         bool   `json:"async,omitempty"`
+}
+
+// BacklogItemResponse is one unimplemented discussion saved to the Kanban backlog.
+type BacklogItemResponse struct {
+	ID                    string    `json:"id"`
+	ProjectID             string    `json:"projectId"`
+	OrchestratorSessionID string    `json:"orchestratorSessionId,omitempty"`
+	Title                 string    `json:"title"`
+	Summary               string    `json:"summary,omitempty"`
+	Prompt                string    `json:"prompt,omitempty"`
+	Status                string    `json:"status" enum:"open,implemented"`
+	SpawnedSessionID      string    `json:"spawnedSessionId,omitempty"`
+	CreatedAt             time.Time `json:"createdAt"`
+	UpdatedAt             time.Time `json:"updatedAt"`
+}
+
+// BacklogItemEnvelope wraps a single backlog item.
+type BacklogItemEnvelope struct {
+	Item BacklogItemResponse `json:"item"`
+}
+
+// ListBacklogResponse lists backlog items.
+type ListBacklogResponse struct {
+	Items []BacklogItemResponse `json:"items"`
+}
+
+// ImplementBacklogItemResponse returns the updated backlog item and spawned worker session id.
+type ImplementBacklogItemResponse struct {
+	Item      BacklogItemResponse `json:"item"`
+	SessionID string              `json:"sessionId"`
+}
+
 // MarkAllNotificationsReadRequest is the optional body of
 // POST /api/v1/notifications/read-all.
 type MarkAllNotificationsReadRequest struct {
@@ -4291,6 +4360,8 @@ type SettingsResponse struct {
 	AccountHandoff bool `json:"accountHandoff" description:"A Chat turn refused for a usage limit moves its session to another signed-in account of the same agent with room, and the prompt is retried there once (Settings, Agent accounts)."`
 	// SessionRetentionDays is how long an archived session is kept.
 	SessionRetentionDays int `json:"sessionRetentionDays" description:"Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it."`
+	// Kanban holds customizable Kanban board layout and rule preferences.
+	Kanban domain.KanbanSettings `json:"kanban"`
 	// CloudEnabled reports whether the cloud offering is available: on for
 	// everyone unless AO_CLOUD_OFFERING switches it off, given a configured
 	// control plane.
@@ -4338,6 +4409,12 @@ type UpdateComputerUseRequest struct {
 // UpdateAccountHandoffRequest turns the usage-limit account handoff on or off.
 type UpdateAccountHandoffRequest struct {
 	Enabled *bool `json:"enabled"`
+}
+
+// UpdateKanbanSettingsRequest replaces Kanban board customization preferences.
+type UpdateKanbanSettingsRequest struct {
+	MoveMergedToDone bool                            `json:"moveMergedToDone"`
+	Columns          []domain.KanbanColumnPreference `json:"columns" required:"true"`
 }
 
 // UpdateChatHibernationRequest flips the daemon-owned idle Chat gate.

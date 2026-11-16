@@ -265,6 +265,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newReviewCommand(ctx))
 	root.AddCommand(newAutomationCommand(ctx))
 	root.AddCommand(newCueCommand(ctx))
+	root.AddCommand(newBacklogCommand(ctx))
 	root.AddCommand(newSearchCommand(ctx))
 	root.AddCommand(newCompletionCommand())
 	root.AddCommand(newVersionCommand())

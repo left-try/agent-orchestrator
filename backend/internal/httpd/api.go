@@ -61,6 +61,7 @@ type APIDeps struct {
 	Directories        controllers.DirectoryBrowserService
 	ShellTerminals     controllers.ShellTerminalService
 	Cues               controllers.CueService
+	Backlog            controllers.BacklogService
 	// Conversations is nil until a Chat driver is wired; the controller then
 	// answers 501 rather than panicking, matching the other optional surfaces.
 	Conversations controllers.ConversationService
@@ -175,6 +176,7 @@ type API struct {
 	fs            *controllers.FSController
 	shellTerms    *controllers.ShellTerminalsController
 	cues          *controllers.CuesController
+	backlog       *controllers.BacklogController
 	conversations *controllers.ConversationsController
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
@@ -244,6 +246,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
+		backlog:       &controllers.BacklogController{Svc: deps.Backlog},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch, UserMessages: userMessageRecorder(deps.Sessions)},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
@@ -272,6 +275,7 @@ func setupRoute(req *http.Request) bool {
 	}
 	switch chi.RouteContext(req.Context()).RoutePattern() {
 	case "/api/v1/sessions", "/api/v1/orchestrators", "/api/v1/sessions/{sessionId}/restore",
+		"/api/v1/backlog/{backlogId}/implement",
 		// The first open of an imported chat runs Setup in its new workspace.
 		"/api/v1/sessions/{sessionId}/resume-agent",
 		// A fork spawns a session, whose Setup runs in its new worktree.
@@ -395,6 +399,7 @@ func (a *API) Register(root chi.Router) {
 			a.fs.Register(r)
 			a.shellTerms.Register(r)
 			a.cues.Register(r)
+			a.backlog.Register(r)
 			a.conversations.Register(r)
 			a.settings.Register(r)
 			a.dev.Register(r)

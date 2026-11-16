@@ -2901,6 +2901,235 @@ paths:
       summary: Manage desktop Stay Awake
       tags:
       - settings
+  /api/v1/backlog:
+    get:
+      operationId: listBacklogItems
+      parameters:
+      - description: Optional project id filter.
+        in: query
+        name: projectId
+        schema:
+          description: Optional project id filter.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBacklogResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List backlog items across projects or filtered by project
+      tags:
+      - backlog
+  /api/v1/backlog/{backlogId}:
+    delete:
+      operationId: deleteBacklogItem
+      parameters:
+      - description: Backlog item identifier.
+        in: path
+        name: backlogId
+        required: true
+        schema:
+          description: Backlog item identifier.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Delete a backlog item
+      tags:
+      - backlog
+    get:
+      operationId: getBacklogItem
+      parameters:
+      - description: Backlog item identifier.
+        in: path
+        name: backlogId
+        required: true
+        schema:
+          description: Backlog item identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BacklogItemEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a backlog item
+      tags:
+      - backlog
+    patch:
+      operationId: updateBacklogItem
+      parameters:
+      - description: Backlog item identifier.
+        in: path
+        name: backlogId
+        required: true
+        schema:
+          description: Backlog item identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBacklogItemRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BacklogItemEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Update a backlog item
+      tags:
+      - backlog
+  /api/v1/backlog/{backlogId}/implement:
+    post:
+      operationId: implementBacklogItem
+      parameters:
+      - description: Backlog item identifier.
+        in: path
+        name: backlogId
+        required: true
+        schema:
+          description: Backlog item identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImplementBacklogItemRequest'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImplementBacklogItemResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Spawn a worker session from a backlog item and mark it implemented
+      tags:
+      - backlog
   /api/v1/browser/chrome:
     delete:
       operationId: removeBrowserChrome
@@ -5416,6 +5645,95 @@ paths:
       summary: Speculatively create the next task's worktree
       tags:
       - projects
+  /api/v1/projects/{projectId}/backlog:
+    get:
+      operationId: listProjectBacklog
+      parameters:
+      - description: Project owning the backlog items.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project owning the backlog items.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBacklogResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List backlog items for a project
+      tags:
+      - backlog
+    post:
+      operationId: createBacklogItem
+      parameters:
+      - description: Project owning the backlog items.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project owning the backlog items.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBacklogItemRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BacklogItemEnvelope'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Save an unimplemented discussion to the project backlog
+      tags:
+      - backlog
   /api/v1/projects/{projectId}/cues:
     get:
       operationId: listProjectCues
@@ -14562,6 +14880,43 @@ paths:
       summary: Choose which models one harness's pickers offer
       tags:
       - settings
+  /api/v1/settings/kanban:
+    patch:
+      operationId: updateKanbanSettings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateKanbanSettingsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Customize Kanban board columns and merged PR routing
+      tags:
+      - settings
   /api/v1/settings/session-interface:
     patch:
       operationId: updateSessionInterface
@@ -17080,6 +17435,48 @@ components:
       - paused
       - networkOutcome
       type: object
+    BacklogItemEnvelope:
+      properties:
+        item:
+          $ref: '#/components/schemas/BacklogItemResponse'
+      required:
+      - item
+      type: object
+    BacklogItemResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        orchestratorSessionId:
+          type: string
+        projectId:
+          type: string
+        prompt:
+          type: string
+        spawnedSessionId:
+          type: string
+        status:
+          enum:
+          - open
+          - implemented
+          type: string
+        summary:
+          type: string
+        title:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - id
+      - projectId
+      - title
+      - status
+      - createdAt
+      - updatedAt
+      type: object
     BrowserCommandRequest:
       properties:
         action:
@@ -18904,6 +19301,7 @@ components:
           - validating
           - needs_review
           - ready
+          - done
           - archive
           type: string
         kind:
@@ -20107,6 +20505,28 @@ components:
       - kind
       - timezone
       type: object
+    CreateBacklogItemRequest:
+      properties:
+        orchestratorSessionId:
+          description: Optional orchestrator session id where the discussion took
+            place.
+          type: string
+        prompt:
+          description: Optional implementation prompt to pass when spawning a worker;
+            defaults to summary or title.
+          maxLength: 16384
+          type: string
+        summary:
+          description: Notes or context summarizing the unimplemented discussion.
+          maxLength: 4096
+          type: string
+        title:
+          description: Short summary title for the backlog card.
+          maxLength: 160
+          type: string
+      required:
+      - title
+      type: object
     CreateConversationSideChatRequest:
       properties:
         forceNew:
@@ -20843,6 +21263,30 @@ components:
       - hostId
       - apiVersion
       type: object
+    ImplementBacklogItemRequest:
+      properties:
+        async:
+          type: boolean
+        harness:
+          type: string
+        interfaceMode:
+          enum:
+          - chat
+          - tui
+          type: string
+        model:
+          type: string
+      type: object
+    ImplementBacklogItemResponse:
+      properties:
+        item:
+          $ref: '#/components/schemas/BacklogItemResponse'
+        sessionId:
+          type: string
+      required:
+      - item
+      - sessionId
+      type: object
     ImportReport:
       properties:
         dryRun:
@@ -21139,6 +21583,41 @@ components:
       required:
       - kind
       type: object
+    KanbanColumnPreference:
+      properties:
+        enabled:
+          type: boolean
+        id:
+          enum:
+          - backlog
+          - building
+          - validating
+          - needs_review
+          - ready
+          - done
+          type: string
+        label:
+          description: Optional custom display label for this column; empty uses the
+            localized default.
+          type: string
+      required:
+      - id
+      - enabled
+      type: object
+    KanbanSettings:
+      properties:
+        columns:
+          items:
+            $ref: '#/components/schemas/KanbanColumnPreference'
+          type: array
+        moveMergedToDone:
+          description: When true (default), sessions whose PRs are merged are placed
+            in the Done column instead of Ready.
+          type: boolean
+      required:
+      - moveMergedToDone
+      - columns
+      type: object
     KillReviewResponse:
       properties:
         reviewerHandleId:
@@ -21264,6 +21743,15 @@ components:
           type: string
       required:
       - automations
+      type: object
+    ListBacklogResponse:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/BacklogItemResponse'
+          type: array
+      required:
+      - items
       type: object
     ListCatalogModelsResponse:
       properties:
@@ -24731,6 +25219,8 @@ components:
           additionalProperties:
             $ref: '#/components/schemas/HarnessDefault'
           type: object
+        kanban:
+          $ref: '#/components/schemas/KanbanSettings'
         localEnabled:
           type: boolean
         sessionRetentionDays:
@@ -24753,6 +25243,7 @@ components:
       - computerUse
       - accountHandoff
       - sessionRetentionDays
+      - kanban
       - cloudEnabled
       - cloudControlPlaneUrl
       - trackerIntakeEnabled
@@ -26068,6 +26559,23 @@ components:
           - "null"
           - string
       type: object
+    UpdateBacklogItemRequest:
+      properties:
+        prompt:
+          maxLength: 16384
+          type: string
+        status:
+          enum:
+          - open
+          - implemented
+          type: string
+        summary:
+          maxLength: 4096
+          type: string
+        title:
+          maxLength: 160
+          type: string
+      type: object
     UpdateChatHibernationRequest:
       properties:
         enabled:
@@ -26097,6 +26605,18 @@ components:
           - array
       required:
       - disabledModels
+      type: object
+    UpdateKanbanSettingsRequest:
+      properties:
+        columns:
+          items:
+            $ref: '#/components/schemas/KanbanColumnPreference'
+          type: array
+        moveMergedToDone:
+          type: boolean
+      required:
+      - moveMergedToDone
+      - columns
       type: object
     UpdateProjectSettingsInput:
       properties:
@@ -27304,3 +27824,6 @@ tags:
   name: link-preview
 - description: Local GitHub personal access token storage and repository listing
   name: github
+- description: Project Kanban backlog items saved from unimplemented orchestrator
+    discussions
+  name: backlog

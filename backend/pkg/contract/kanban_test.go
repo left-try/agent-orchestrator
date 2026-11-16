@@ -62,9 +62,9 @@ func TestDeriveKanbanColumnSinglePR(t *testing.T) {
 			want: contract.KanbanValidating,
 		},
 		{
-			name: "merged is ready",
+			name: "merged is done",
 			pr:   contract.KanbanPRFacts{URL: "pr/1", Merged: true},
-			want: contract.KanbanReady,
+			want: contract.KanbanDone,
 		},
 		{
 			name: "closed without merge is ready",
@@ -370,8 +370,8 @@ func TestDeriveKanbanColumnMultiplePRs(t *testing.T) {
 			{URL: "pr/merged", Merged: true, UpdatedAt: newer},
 			{URL: "pr/closed", Closed: true, UpdatedAt: older},
 		})
-		if got != contract.KanbanReady {
-			t.Fatalf("column = %q, want %q", got, contract.KanbanReady)
+		if got != contract.KanbanDone {
+			t.Fatalf("column = %q, want %q", got, contract.KanbanDone)
 		}
 	})
 
@@ -924,20 +924,20 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 			name:       "a merged pr reports the merge after the worker exits",
 			session:    sessionAt(contract.ActivityExited),
 			pr:         contract.KanbanPRFacts{URL: "pr/1", Merged: true},
-			wantColumn: contract.KanbanReady,
+			wantColumn: contract.KanbanDone,
 			want:       contract.DisplayMerged,
 		},
 		{
 			name:       "a merged pr reports the merge while the worker is still working",
 			session:    sessionAt(contract.ActivityActive),
 			pr:         contract.KanbanPRFacts{URL: "pr/1", Merged: true},
-			wantColumn: contract.KanbanReady,
+			wantColumn: contract.KanbanDone,
 			want:       contract.DisplayMerged,
 		},
 		{
 			name:       "a merged pr is merged",
 			pr:         contract.KanbanPRFacts{URL: "pr/1", Merged: true},
-			wantColumn: contract.KanbanReady,
+			wantColumn: contract.KanbanDone,
 			want:       contract.DisplayMerged,
 		},
 		{
@@ -949,7 +949,7 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 		{
 			name:       "a merged pr reports the merge, not its stale merge readiness",
 			pr:         contract.KanbanPRFacts{URL: "pr/1", Merged: true, Mergeability: contract.MergeMergeable},
-			wantColumn: contract.KanbanReady,
+			wantColumn: contract.KanbanDone,
 			want:       contract.DisplayMerged,
 		},
 	}
@@ -1042,7 +1042,7 @@ func TestDeriveKanbanPresentationSpeaksForTheChosenPR(t *testing.T) {
 			time.Unix(3600, 0), testGrace,
 		)
 		want := contract.KanbanPresentation{
-			Column:        contract.KanbanReady,
+			Column:        contract.KanbanDone,
 			DisplayStatus: contract.DisplayMerged,
 		}
 		if got != want {

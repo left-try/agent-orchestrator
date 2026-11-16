@@ -75,10 +75,12 @@ describe("session presentation", () => {
 	});
 
 	it.each([
+		["backlog", "Backlog", "bg-status-idle"],
 		["building", "Building", "bg-status-working"],
 		["validating", "Validating", "bg-status-validating"],
 		["needs_review", "In review", "bg-status-in-review"],
 		["ready", "Ready", "bg-status-ready"],
+		["done", "Done", "bg-status-merged"],
 		["archive", "Archive", "bg-status-terminated"],
 	] as const)("gives the %s column its own label and palette", (column, label, dotClassName) => {
 		expect(getKanbanColumnView(column)).toMatchObject({ column, label, dotClassName });

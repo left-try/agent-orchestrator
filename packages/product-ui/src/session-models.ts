@@ -36,10 +36,12 @@ export type SessionActivity = {
 };
 
 export const KANBAN_COLUMNS = [
+	"backlog",
 	"building",
 	"validating",
 	"needs_review",
 	"ready",
+	"done",
 	"archive",
 ] as const;
 

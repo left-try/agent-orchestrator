@@ -23,6 +23,7 @@ const {
 	sessionMemoryMock,
 	navigateMock,
 	notificationShowMock,
+	getMock,
 	postMock,
 	patchMock,
 	workspaceQueryMock,
@@ -50,6 +51,7 @@ const {
 		sessionMemoryMock: vi.fn(),
 		navigateMock: vi.fn(),
 		notificationShowMock: vi.fn(),
+		getMock: vi.fn(),
 		postMock: vi.fn(),
 		patchMock: vi.fn(),
 		workspaceQueryMock: vi.fn(),
@@ -118,7 +120,11 @@ vi.mock("../hooks/useSessionMemory", async (importOriginal) => {
 });
 
 vi.mock("../lib/api-client", () => ({
-	apiClient: { POST: (...args: unknown[]) => postMock(...args), PATCH: (...args: unknown[]) => patchMock(...args) },
+	apiClient: {
+		GET: (...args: unknown[]) => getMock(...args),
+		POST: (...args: unknown[]) => postMock(...args),
+		PATCH: (...args: unknown[]) => patchMock(...args),
+	},
 	apiErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 	getApiBaseUrl: () => "http://127.0.0.1:3001",
@@ -199,6 +205,7 @@ beforeEach(() => {
 	useUiStore.setState({ developerMode: true, diagnostics: true, archiveModal: null });
 	navigateMock.mockReset();
 	notificationShowMock.mockReset().mockResolvedValue(undefined);
+	getMock.mockReset().mockResolvedValue({ data: {}, response: { status: 200 } });
 	postMock.mockReset().mockResolvedValue({ data: {} });
 	patchMock.mockReset().mockResolvedValue({ data: {}, response: { status: 200 } });
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [], isError: false });
@@ -1885,7 +1892,7 @@ describe("SessionsBoard", () => {
 		expect(within(lane("Ready sessions")).getByText("legacy ready worker")).toBeInTheDocument();
 	});
 
-	it("orders the lanes building, validating, in review, then ready", () => {
+	it("orders the lanes building, validating, in review, ready, then done", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([boardSession({ id: "s-one", title: "worker one", status: "idle" })])],
 			isError: false,
@@ -1899,6 +1906,7 @@ describe("SessionsBoard", () => {
 			"validating",
 			"needs_review",
 			"ready",
+			"done",
 		]);
 	});
 
@@ -1923,7 +1931,7 @@ describe("SessionsBoard", () => {
 		const laneScrollers = screen
 			.getAllByTestId("board-column")
 			.flatMap((column) => Array.from(column.querySelectorAll<HTMLElement>(".overflow-y-auto")));
-		expect(laneScrollers).toHaveLength(4);
+		expect(laneScrollers).toHaveLength(5);
 		for (const scroller of laneScrollers) {
 			expect(scroller).toHaveClass("board-scrollbar", "overflow-y-auto");
 		}
@@ -2280,6 +2288,118 @@ describe("SessionsBoard artifacts", () => {
 
 		await screen.findByText("Fix the bug");
 		expect(screen.queryByTestId("board-session-artifacts")).not.toBeInTheDocument();
+	});
+
+	it("opens the customize board dialog from the topbar Customize action", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "s1", title: "active worker", status: "working" })])],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+
+		const customizeBtn = await screen.findByTestId("board-customize-button");
+		await userEvent.click(customizeBtn);
+
+		expect(await screen.findByRole("dialog", { name: "Customize board" })).toBeInTheDocument();
+	});
+
+	it("renders the Backlog column and backlog cards when enabled in settings", async () => {
+		getMock.mockImplementation((url: string) => {
+			if (url === "/api/v1/settings") {
+				return Promise.resolve({
+					data: {
+						kanban: {
+							moveMergedToDone: true,
+							columns: [
+								{ id: "backlog", enabled: true, label: "Ideas" },
+								{ id: "building", enabled: true },
+								{ id: "validating", enabled: true },
+								{ id: "needs_review", enabled: true },
+								{ id: "ready", enabled: true },
+								{ id: "done", enabled: true },
+							],
+						},
+					},
+					response: { status: 200 },
+				});
+			}
+			if (url === "/api/v1/projects/{projectId}/backlog") {
+				return Promise.resolve({
+					data: {
+						items: [
+							{
+								id: "b-1",
+								projectId: "p1",
+								title: "Explore sqlite vector search",
+								summary: "Evaluate sqlite-vec extension",
+								status: "open",
+								createdAt: "2026-01-01T00:00:00Z",
+								updatedAt: "2026-01-01T00:00:00Z",
+							},
+						],
+					},
+					response: { status: 200 },
+				});
+			}
+			return Promise.resolve({ data: {}, response: { status: 200 } });
+		});
+
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "s1", title: "working session", status: "working" })])],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+
+		expect(await screen.findByText("Explore sqlite vector search")).toBeInTheDocument();
+		expect(screen.getByRole("region", { name: "Ideas sessions" })).toBeInTheDocument();
+		expect(screen.getByTestId("backlog-add-button")).toBeInTheDocument();
+	});
+
+	it("routes merged sessions to ready lane when moveMergedToDone is false", async () => {
+		getMock.mockImplementation((url: string) => {
+			if (url === "/api/v1/settings") {
+				return Promise.resolve({
+					data: {
+						kanban: {
+							moveMergedToDone: false,
+							columns: [
+								{ id: "building", enabled: true },
+								{ id: "validating", enabled: true },
+								{ id: "needs_review", enabled: true },
+								{ id: "ready", enabled: true },
+								{ id: "done", enabled: true },
+							],
+						},
+					},
+					response: { status: 200 },
+				});
+			}
+			return Promise.resolve({ data: {}, response: { status: 200 } });
+		});
+
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([
+					boardSession({
+						id: "s-merged",
+						title: "already merged PR",
+						status: "merged",
+						kanbanColumn: "done",
+					}),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+
+		const readyLane = await screen.findByRole("region", { name: "Ready sessions" });
+		expect(within(readyLane).getByText("already merged PR")).toBeInTheDocument();
 	});
 });
 

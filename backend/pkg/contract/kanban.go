@@ -23,9 +23,11 @@ const (
 	// loop is fixing. It is not limited to PRs awaiting a first human review,
 	// and it does not mean the work is idle.
 	KanbanNeedsReview KanbanColumn = "needs_review"
-	// KanbanReady is a PR merged, closed, mergeable, or approved by a person
-	// with no merge conflicts or failing CI in the way.
+	// KanbanReady is a PR closed without merge, mergeable, or approved by a
+	// person with no merge conflicts or failing CI in the way.
 	KanbanReady KanbanColumn = "ready"
+	// KanbanDone is a session whose PR has been merged (with no newer live PR).
+	KanbanDone KanbanColumn = "done"
 	// KanbanArchive is a terminated session.
 	KanbanArchive KanbanColumn = "archive"
 )
@@ -101,7 +103,9 @@ type KanbanPRFacts struct {
 
 func derivePRKanbanColumn(session KanbanSessionFacts, pr KanbanPRFacts) KanbanColumn {
 	switch {
-	case pr.Merged || pr.Closed:
+	case pr.Merged:
+		return KanbanDone
+	case pr.Closed:
 		return KanbanReady
 	case pr.Draft:
 		return KanbanValidating
@@ -194,14 +198,16 @@ func outranksKanban(candidate KanbanColumn, pr KanbanPRFacts, current KanbanColu
 
 func kanbanPriority(column KanbanColumn) int {
 	switch column {
-	case KanbanReady:
+	case KanbanDone:
 		return 0
-	case KanbanNeedsReview:
+	case KanbanReady:
 		return 1
-	case KanbanValidating:
+	case KanbanNeedsReview:
 		return 2
-	default:
+	case KanbanValidating:
 		return 3
+	default:
+		return 4
 	}
 }
 
@@ -315,7 +321,7 @@ func displayStatusInColumn(
 		return validatingDisplayStatus(session, pr, now, noSignalGrace)
 	case KanbanNeedsReview:
 		return inReviewDisplayStatus(session, pr, now, noSignalGrace)
-	case KanbanReady:
+	case KanbanReady, KanbanDone:
 		return readyDisplayStatus(session, pr, now, noSignalGrace)
 	default:
 		return buildingDisplayStatus(session, now, noSignalGrace)
