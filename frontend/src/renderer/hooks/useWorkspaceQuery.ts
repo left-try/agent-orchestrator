@@ -1244,7 +1244,7 @@ function selectWorkspaceScope(
 		project,
 		session,
 		hasWorkerSessions: workspace ? workerSessions(workspace.sessions).length > 0 : false,
-		orchestrator: workspace ? newestActiveOrchestrator(workspace.sessions) : undefined,
+		orchestrator: workspace ? newestActiveOrchestrator(workspace.sessions, session?.workspaceFolder ?? "") : undefined,
 	};
 }
 

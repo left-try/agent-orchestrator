@@ -25235,6 +25235,9 @@ components:
           type: string
         projectId:
           type: string
+        workspaceFolder:
+          maxLength: 512
+          type: string
       required:
       - projectId
       type: object
@@ -25350,6 +25353,9 @@ components:
           enum:
           - github
           - gitlab
+          type: string
+        workspaceFolder:
+          maxLength: 512
           type: string
       type: object
     SpawnSessionResponse:

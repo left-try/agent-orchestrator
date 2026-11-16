@@ -190,7 +190,16 @@ func (s *Store) createConversation(
 
 	scope := options.scope
 	if scope == domain.ConversationScopeProject {
-		if existing, err := s.qw.SelectProjectConversation(ctx, optionalProjectID(options.project)); err == nil {
+		var workspaceFolder string
+		if owner, err := s.qw.GetSession(ctx, options.session); err == nil {
+			workspaceFolder = owner.WorkspaceFolder
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return domain.ConversationRecord{}, fmt.Errorf("select controller session %s: %w", options.session, err)
+		}
+		if existing, err := s.qw.SelectProjectConversation(ctx, gen.SelectProjectConversationParams{
+			ProjectID:       optionalProjectID(options.project),
+			WorkspaceFolder: workspaceFolder,
+		}); err == nil {
 			if options.preserveOwner {
 				if existing.CurrentSessionID == nil || *existing.CurrentSessionID != options.session {
 					return domain.ConversationRecord{}, fmt.Errorf("project conversation %s is no longer owned by session %s", existing.ID, options.session)
@@ -306,15 +315,20 @@ func (s *Store) createConversation(
 	}
 	rootBranchID := options.id + ":root"
 	var latestSequence int64
+	var workspaceFolder string
 	err := s.inTx(ctx, "insert conversation", func(q *gen.Queries) error {
 		owner, getErr := q.GetSession(ctx, options.session)
 		if getErr != nil {
 			return fmt.Errorf("select controller session %s: %w", options.session, getErr)
 		}
+		if scope == domain.ConversationScopeProject {
+			workspaceFolder = owner.WorkspaceFolder
+		}
 		if insertErr := q.InsertConversation(ctx, gen.InsertConversationParams{
 			ID:               options.id,
 			Scope:            scope,
 			ProjectID:        optionalProjectID(options.project),
+			WorkspaceFolder:  workspaceFolder,
 			SessionID:        ownerSession,
 			CurrentSessionID: &options.session,
 			ActiveBranchID:   rootBranchID,
@@ -352,14 +366,15 @@ func (s *Store) createConversation(
 	}
 
 	return domain.ConversationRecord{
-		ID:             options.id,
-		Scope:          scope,
-		ProjectID:      options.project,
-		SessionID:      options.session,
-		ActiveBranchID: rootBranchID,
-		LatestSequence: latestSequence,
-		CreatedAt:      options.now,
-		UpdatedAt:      options.now,
+		ID:              options.id,
+		Scope:           scope,
+		ProjectID:       options.project,
+		WorkspaceFolder: workspaceFolder,
+		SessionID:       options.session,
+		ActiveBranchID:  rootBranchID,
+		LatestSequence:  latestSequence,
+		CreatedAt:       options.now,
+		UpdatedAt:       options.now,
 	}, nil
 }
 
@@ -769,6 +784,7 @@ func (s *Store) commitChatSpawn(
 				return err
 			}
 			if conversation.Scope != domain.ConversationScopeProject || previous.ProjectID == nil || *previous.ProjectID != rec.ProjectID ||
+				previous.WorkspaceFolder != owner.WorkspaceFolder ||
 				!previous.IsTerminated || !rec.CreatedAt.After(previous.CreatedAt) {
 				return errors.New("native Chat handoff project owner is not a retired predecessor")
 			}
@@ -777,7 +793,7 @@ func (s *Store) commitChatSpawn(
 				return err
 			}
 			for _, session := range sessions {
-				if session.Kind == domain.KindOrchestrator && session.ID != rec.ID && !session.IsTerminated {
+				if session.Kind == domain.KindOrchestrator && session.WorkspaceFolder == owner.WorkspaceFolder && session.ID != rec.ID && !session.IsTerminated {
 					return errors.New("native Chat handoff has a competing live orchestrator")
 				}
 			}
@@ -1130,7 +1146,17 @@ func (s *Store) ActivateConversationBranch(
 // ProjectConversation is a read-only lookup; unlike CreateConversation it does
 // not transfer ownership before a replacement provider has connected.
 func (s *Store) ProjectConversation(ctx context.Context, project domain.ProjectID) (domain.ConversationRecord, error) {
-	row, err := s.qr.SelectProjectConversation(ctx, optionalProjectID(project))
+	return s.ProjectConversationForFolder(ctx, project, "")
+}
+
+// ProjectConversationForFolder looks up the project-scoped conversation for the
+// given workspace folder (empty string for single-repo projects or the workspace
+// main orchestrator).
+func (s *Store) ProjectConversationForFolder(ctx context.Context, project domain.ProjectID, workspaceFolder string) (domain.ConversationRecord, error) {
+	row, err := s.qr.SelectProjectConversation(ctx, gen.SelectProjectConversationParams{
+		ProjectID:       optionalProjectID(project),
+		WorkspaceFolder: workspaceFolder,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.ConversationRecord{}, ErrConversationNotFound
 	}
@@ -1165,6 +1191,53 @@ func (s *Store) ConversationForSession(
 		return domain.ConversationRecord{}, fmt.Errorf("select conversation for %s: %w", session, err)
 	}
 	return conversationToDomain(row), nil
+}
+
+// BackfillSessionWorkspaceFolder persists an inferred workspace folder only
+// when the session does not already record one.
+func (s *Store) BackfillSessionWorkspaceFolder(ctx context.Context, id domain.SessionID, workspaceFolder string) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.BackfillSessionWorkspaceFolder(ctx, gen.BackfillSessionWorkspaceFolderParams{
+		WorkspaceFolder: workspaceFolder,
+		ID:              id,
+	})
+	if err != nil {
+		return false, fmt.Errorf("backfill workspace folder for %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// ListSessionTurnDiffs returns decoded turn diff summaries handled by each
+// requested session. Malformed or empty turn diffs are skipped.
+func (s *Store) ListSessionTurnDiffs(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.ConversationTurnDiff, error) {
+	out := make(map[domain.SessionID][]domain.ConversationTurnDiff)
+	if len(ids) == 0 {
+		return out, nil
+	}
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return nil, fmt.Errorf("marshal session ids: %w", err)
+	}
+	rows, err := s.qr.ListSessionTurnDiffs(ctx, string(encoded))
+	if err != nil {
+		return nil, fmt.Errorf("list session turn diffs: %w", err)
+	}
+	for _, row := range rows {
+		if row.DiffJson == "" {
+			continue
+		}
+		var diff domain.ConversationTurnDiff
+		if err := json.Unmarshal([]byte(row.DiffJson), &diff); err != nil {
+			continue
+		}
+		if len(diff.Files) == 0 {
+			continue
+		}
+		sid := domain.SessionID(row.SessionID)
+		out[sid] = append(out[sid], diff)
+	}
+	return out, nil
 }
 
 // ListInterruptedSessions reports which of the given sessions had their latest
@@ -4722,10 +4795,11 @@ func (s *Store) turnIDFor(ctx context.Context, conversationID, providerTurnID st
 
 func conversationToDomain(row gen.Conversation) domain.ConversationRecord {
 	rec := domain.ConversationRecord{
-		ID:             row.ID,
-		Scope:          row.Scope,
-		ProjectID:      projectIDValue(row.ProjectID),
-		ActiveBranchID: row.ActiveBranchID,
+		ID:              row.ID,
+		Scope:           row.Scope,
+		ProjectID:       projectIDValue(row.ProjectID),
+		WorkspaceFolder: row.WorkspaceFolder,
+		ActiveBranchID:  row.ActiveBranchID,
 		LatestSequence: row.LatestSequence,
 		Settings: domain.ConversationSettings{
 			Model:           row.Model.String,

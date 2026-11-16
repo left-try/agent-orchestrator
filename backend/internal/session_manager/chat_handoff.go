@@ -40,9 +40,16 @@ func (m *Manager) prepareLiveChatProviderHandoff(ctx context.Context, rec domain
 	}
 	conversation, err := store.ConversationForSession(ctx, rec.ID)
 	if errors.Is(err, domain.ErrNoConversation) && rec.Kind == domain.KindOrchestrator {
-		if projects, ok := m.store.(interface {
-			ProjectConversation(context.Context, domain.ProjectID) (domain.ConversationRecord, error)
+		if folderProjects, ok := m.store.(interface {
+			ProjectConversationForFolder(context.Context, domain.ProjectID, string) (domain.ConversationRecord, error)
 		}); ok {
+			conversation, err = folderProjects.ProjectConversationForFolder(ctx, rec.ProjectID, rec.Metadata.WorkspaceFolder)
+			if errors.Is(err, domain.ErrNoConversation) {
+				return nil, nil // first Chat use in this project/folder
+			}
+		} else if projects, ok := m.store.(interface {
+			ProjectConversation(context.Context, domain.ProjectID) (domain.ConversationRecord, error)
+		}); ok && rec.Metadata.WorkspaceFolder == "" {
 			conversation, err = projects.ProjectConversation(ctx, rec.ProjectID)
 			if errors.Is(err, domain.ErrNoConversation) {
 				return nil, nil // first Chat use in this project
@@ -61,10 +68,12 @@ func (m *Manager) prepareLiveChatProviderHandoff(ctx context.Context, rec domain
 			return nil, err
 		}
 		if !found || !previous.IsTerminated || rec.IsTerminated ||
-			previous.ProjectID != rec.ProjectID || !rec.CreatedAt.After(previous.CreatedAt) {
+			previous.ProjectID != rec.ProjectID ||
+			previous.Metadata.WorkspaceFolder != rec.Metadata.WorkspaceFolder ||
+			!rec.CreatedAt.After(previous.CreatedAt) {
 			return nil, fmt.Errorf("project conversation %s is owned by another session", conversation.ID)
 		}
-		current, found, err := m.activeOrchestratorSessionID(ctx, rec.ProjectID)
+		current, found, err := m.activeOrchestratorSessionID(ctx, rec.ProjectID, rec.Metadata.WorkspaceFolder)
 		if err != nil {
 			return nil, err
 		}

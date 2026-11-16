@@ -61,7 +61,7 @@ import {
 import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { artifactCount, groupArtifactsByProject } from "../lib/artifacts";
-import { filterSessionsByFolder } from "../lib/workspace-folder";
+import { sessionMatchesWorkspaceFolder, workspaceFolderRepoForSession } from "../lib/workspace-folder";
 import {
 	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
@@ -114,7 +114,6 @@ import {
 } from "./ui/context-menu";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
 import { SessionPreviewCardAdapter } from "./SessionsBoardAdapters";
-import { WorkspaceFolderMarker } from "./WorkspaceFolderMarker";
 
 const EMPTY_WORKSPACE_REPOS: NonNullable<WorkspaceSummary["workspaceRepos"]> = [];
 import {
@@ -544,8 +543,11 @@ function useSelection() {
 		projectId?: string;
 		sessionId?: string;
 	};
-	const pathname = useRouterState({
-		select: (state) => state.location.pathname,
+	const { pathname, search } = useRouterState({
+		select: (state) => ({
+			pathname: state.location.pathname,
+			search: state.location.search as { folder?: string } | undefined,
+		}),
 	});
 	const goHome = useCallback(() => void navigate({ to: "/" }), [navigate]);
 	const goAutomations = useCallback(() => void navigate({ to: "/automations" }), [navigate]);
@@ -557,7 +559,12 @@ function useSelection() {
 	const goConnectMobile = useCallback(() => openGlobalSettings("mobile", { startPairing: true }), [openGlobalSettings]);
 	const goSettings = useCallback((projectId: string, cloudOrgId?: string) => openProjectSettings(projectId, { cloudOrgId }), [openProjectSettings]);
 	const goProject = useCallback(
-		(projectId: string) => void navigate({ to: "/projects/$projectId", params: { projectId } }),
+		(projectId: string, folder?: string) =>
+			void navigate({
+				to: "/projects/$projectId",
+				params: { projectId },
+				search: folder ? { folder } : undefined,
+			}),
 		[navigate],
 	);
 	const goSession = useCallback(
@@ -583,6 +590,7 @@ function useSelection() {
 		activeRemoteSessionId: params.hostId ? params.sessionId : undefined,
 		activeProjectId: params.hostId ? undefined : params.projectId,
 		activeSessionId: params.hostId ? undefined : params.sessionId,
+		activeFolder: params.hostId ? undefined : search?.folder,
 		goHome,
 		goAutomations,
 		goArtifacts,
@@ -595,7 +603,7 @@ function useSelection() {
 		goSettings,
 		goProject,
 		goSession,
-	}), [goArtifacts, goAutomations, goUsage, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
+	}), [goArtifacts, goAutomations, goUsage, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname, search?.folder]);
 }
 
 // Rows showing the red alert sit above the rest, but only in the default
@@ -1520,7 +1528,7 @@ type ProjectItemProps = {
 // keys on the raw session id: a just-opened session may not be listed yet.
 function projectSelectionKey(workspace: WorkspaceSummary, selection: Selection): string {
 	const sessionId = selection.activeSessionId ?? "";
-	if (selection.activeProjectId === workspace.id) return `active\u0000${sessionId}`;
+	if (selection.activeProjectId === workspace.id) return `active\u0000${sessionId}\u0000${selection.activeFolder ?? ""}`;
 	return workspace.sessions.some((session) => session.id === sessionId) ? sessionId : "";
 }
 
@@ -1544,6 +1552,278 @@ function LazyMenuEntries({ build }: { build: () => MenuEntry[] }) {
 	return <MenuEntries entries={build()} />;
 }
 
+type WorkspaceFolderBranchProps = {
+	workspace: WorkspaceSummary;
+	repo: NonNullable<WorkspaceSummary["workspaceRepos"]>[number];
+	sessions: WorkspaceSession[];
+	selection: Selection;
+	projectKey: string;
+	projectDragInProgress: boolean;
+	consumeDragClick: (id: string) => boolean;
+	onKilled: (session: WorkspaceSession) => void;
+	onOpenSession: (sessionId: string) => void;
+};
+
+const WorkspaceFolderBranch = memo(function WorkspaceFolderBranch({
+	workspace,
+	repo,
+	sessions,
+	selection,
+	projectKey,
+	projectDragInProgress,
+	consumeDragClick,
+	onKilled,
+	onOpenSession,
+}: WorkspaceFolderBranchProps) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const requestNewTask = useUiStore((state) => state.requestNewTask);
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const isProjectRestarting = useUiStore((state) => state.restartingProjectIds.has(projectKey));
+	const isProjectProvisioning = useUiStore((state) => state.provisioningProjectIds.has(projectKey));
+	const [isSpawning, setIsSpawning] = useState(false);
+	const prefersReducedMotion = useReducedMotion();
+
+	const folderOrchestrator = newestActiveOrchestrator(workspace.sessions, repo.relativePath);
+	const canResumeOrchestrator = useCanResumeAgent(folderOrchestrator, workspace.hostId);
+
+	const isThisProject = selection.activeProjectId === workspace.id;
+	const folderBoardActive = isThisProject && !selection.activeSessionId && selection.activeFolder === repo.relativePath;
+	const folderOrchestratorActive = isThisProject && folderOrchestrator && selection.activeSessionId === folderOrchestrator.id;
+	const folderActive = folderBoardActive || Boolean(folderOrchestratorActive);
+
+	const folderNeedsInput = useMemo(() => sessions.some(sessionNeedsInput), [sessions]);
+
+	const [collapsed, setCollapsed] = useState(false);
+	const folderExpanded = !collapsed;
+
+	const orchestratorReply = useOrchestratorReplyState({
+		projectId: workspace.id,
+		hostId: workspace.hostId,
+		orchestrator: folderOrchestrator,
+		viewing: Boolean(folderOrchestratorActive),
+	});
+
+	const onFolderRowClick = () => {
+		if (consumeDragClick(repo.relativePath)) return;
+		if (!folderExpanded) {
+			setCollapsed(false);
+			selection.goProject(workspace.id, repo.relativePath);
+		} else if (folderBoardActive) {
+			setCollapsed(true);
+		} else {
+			selection.goProject(workspace.id, repo.relativePath);
+		}
+	};
+
+	const onToggleClick = (event: MouseEvent) => {
+		event.stopPropagation();
+		setCollapsed((prev) => !prev);
+	};
+
+	const openFolderOrchestrator = async () => {
+		if (isSpawning || isProjectProvisioning || isProjectRestarting) return;
+		if (collapsed) setCollapsed(false);
+		if (folderOrchestrator) {
+			if (canResumeOrchestrator && workspace.kind !== "cloud") {
+				setIsSpawning(true);
+				try {
+					const resume = resumeOrchestrator(folderOrchestrator.id, workspace.hostId);
+					selection.goSession(workspace.id, folderOrchestrator.id);
+					await resume;
+					await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(workspace.hostId) });
+					return;
+				} catch (err) {
+					console.error("Failed to resume folder orchestrator:", err);
+					showGlobalToast(
+						t("inspector.resumeAgent"),
+						err instanceof Error ? err.message : t("shell.couldNotSpawn"),
+						"error",
+					);
+					return;
+				} finally {
+					setIsSpawning(false);
+				}
+			}
+			selection.goSession(workspace.id, folderOrchestrator.id);
+			return;
+		}
+		if (workspace.shared) return;
+		setIsSpawning(true);
+		try {
+			const sessionId = await spawnOrchestrator(
+				workspace.id,
+				"sidebar",
+				false,
+				undefined,
+				undefined,
+				workspace.hostId,
+				repo.relativePath,
+			);
+			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(workspace.hostId) });
+			selection.goSession(workspace.id, sessionId);
+		} catch (err) {
+			console.error("Failed to spawn folder orchestrator:", err);
+			showGlobalToast(
+				t("shell.spawnOrchestratorLower"),
+				err instanceof Error ? err.message : t("shell.couldNotSpawn"),
+				"error",
+			);
+		} finally {
+			setIsSpawning(false);
+		}
+	};
+
+	const folderKey = `${projectKey}:${repo.relativePath}`;
+	const sessionIds = useMemo(() => sessions.map((s) => s.id), [sessions]);
+
+	return (
+		<div className="relative mt-0.5" data-workspace-folder-branch={repo.relativePath}>
+			<div className="group/nav-row group/folder-row relative flex h-7.5 w-full items-center">
+				<SidebarMenuButton
+					aria-label={`${repo.name} · ${workspace.name}`}
+					aria-current={folderBoardActive ? "page" : undefined}
+					aria-expanded={folderExpanded}
+					isActive={folderActive}
+					tooltip={`${repo.name} (${repo.relativePath})`}
+					onClick={onFolderRowClick}
+					className={cn(
+						NAV_ROW_CLASS,
+						NAV_ROW_HIGHLIGHT_HOST_CLASS,
+						"h-7.5 py-0 pl-4 pr-1 text-xs font-medium text-muted-foreground hover:text-foreground",
+						folderActive && "text-foreground",
+					)}
+				>
+					<NavRowHighlight active={folderActive} />
+					<span
+						aria-hidden="true"
+						className="relative z-[1] inline-flex size-4 shrink-0 items-center justify-center cursor-pointer mr-0.5"
+						onClick={onToggleClick}
+					>
+						<ChevronRight
+							className={cn(
+								"size-3 transition-transform duration-150",
+								folderExpanded && "rotate-90",
+							)}
+						/>
+					</span>
+					<span
+						aria-hidden="true"
+						className="relative z-[1] inline-flex size-4 shrink-0 items-center justify-center mr-1 text-muted-foreground"
+					>
+						{!folderExpanded && folderNeedsInput ? (
+							<SessionMarkerIcon data-project-marker="attention" marker="attention" />
+						) : (
+							<Folder className="size-3.5" />
+						)}
+					</span>
+					<span className="relative z-[1] min-w-0 flex-1 truncate" data-folder-name="">
+						{repo.name}
+					</span>
+				</SidebarMenuButton>
+
+				{/* Trailing folder actions: Folder Orchestrator + New Task in folder */}
+				<div
+					className={cn(
+						"sidebar-expanded-chrome z-chrome absolute right-1 inset-y-0 flex items-center gap-0.5 opacity-0 group-hover/folder-row:opacity-100 group-focus-within/folder-row:opacity-100",
+						(folderOrchestratorActive || isSpawning) && "opacity-100",
+					)}
+					onClick={(event) => event.stopPropagation()}
+					onPointerDown={(event) => event.stopPropagation()}
+				>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								size="icon-xs"
+								variant="quiet"
+								aria-label={t("shell.newTask")}
+								className={cn(HOVER_ACTION_CLASS, "size-5 p-0")}
+								disabled={isProjectRestarting}
+								onClick={(e) => {
+									e.stopPropagation();
+									requestNewTask(workspace.id, workspace.hostId, { folder: repo.relativePath });
+								}}
+								type="button"
+							>
+								<Plus className="size-3" aria-hidden="true" />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>{t("shell.newTask")}</TooltipContent>
+					</Tooltip>
+
+					{!workspace.shared || folderOrchestrator ? (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									size="icon-xs"
+									variant="quiet"
+									aria-current={folderOrchestratorActive ? "page" : undefined}
+									aria-label={orchestratorReplyLabel(
+										folderOrchestrator
+											? `${repo.name} ${t("shell.orchestrator")}`
+											: `${t("shell.spawnOrchestratorLower")} (${repo.name})`,
+										orchestratorReply,
+										t,
+									)}
+									className={cn(HOVER_ACTION_CLASS, "size-5 p-0", folderOrchestratorActive && "text-foreground")}
+									disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
+									onClick={(e) => {
+										e.stopPropagation();
+										void openFolderOrchestrator();
+									}}
+									type="button"
+								>
+									<OrchestratorReplyIcon
+										reply={orchestratorReply}
+										strokeWidth={folderOrchestratorActive ? 2.5 : 2}
+										surface="sidebar"
+									/>
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent>
+								{isProjectProvisioning || isProjectRestarting
+									? t("shell.restarting")
+									: isSpawning
+									? t("shell.spawning")
+									: folderOrchestrator
+									? orchestratorReplyLabel(`${repo.name} ${t("shell.orchestrator")}`, orchestratorReply, t)
+									: `${t("shell.spawnOrchestratorLower")} (${repo.name})`}
+							</TooltipContent>
+						</Tooltip>
+					) : null}
+				</div>
+			</div>
+
+			{/* Nested sessions in this folder */}
+			<AnimatePresence initial={false}>
+				{folderExpanded && sessions.length > 0 && (
+					<motion.div
+						initial={prefersReducedMotion ? false : { height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={prefersReducedMotion ? false : { height: 0, opacity: 0 }}
+						transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }}
+						style={{ overflow: "hidden" }}
+					>
+						<SessionReorderList
+							dndId={sessionDndId(folderKey)}
+							testId={`session-list-${folderKey}`}
+							className="mx-0 ml-6 translate-x-0 gap-px border-l-0 px-0 pt-0.5 pb-1"
+							sessions={sessions}
+							repos={[repo]}
+							sessionIds={sessionIds}
+							activeSessionId={selection.activeSessionId}
+							plain={projectDragInProgress}
+							onReorder={() => {}}
+							onKilled={onKilled}
+							onOpen={onOpenSession}
+						/>
+					</motion.div>
+				)}
+			</AnimatePresence>
+		</div>
+	);
+});
+
 const ProjectItem = memo(function ProjectItem({
 	workspace,
 	avatarUrl,
@@ -1565,6 +1845,7 @@ const ProjectItem = memo(function ProjectItem({
 	const { t } = useTranslation();
 	const nameWithHost = hostLabel ? `${workspace.name} · ${hostLabel}` : workspace.name;
 	const isStandalone = workspace.id === STANDALONE_WORKSPACE_ID;
+	const isMultiFolder = !isStandalone && (workspace.workspaceRepos?.length ?? 0) > 0;
 	// A Cloud standalone agent (here, one shared with the person) is one
 	// session: it has no board, orchestrator or project settings to offer.
 	const isAgent = workspace.standaloneAgent === true;
@@ -1572,12 +1853,12 @@ const ProjectItem = memo(function ProjectItem({
 	const activeProjectMatches = selection.activeProjectId === workspace.id;
 	const projectHeaderRef = useRef<HTMLDivElement>(null);
 	const projectSessionsRef = useRef<HTMLDivElement>(null);
-	const dashboardActive = activeProjectMatches && !selection.activeSessionId;
+	const dashboardActive = activeProjectMatches && !selection.activeSessionId && !selection.activeFolder;
+	const orchestrator = newestActiveOrchestrator(workspace.sessions, "");
 	const orchestratorActive =
 		activeProjectMatches &&
-		workspace.sessions.some(
-			(session) => session.id === selection.activeSessionId && session.kind === "orchestrator",
-		);
+		orchestrator !== undefined &&
+		selection.activeSessionId === orchestrator.id;
 
 	const queryClient = useQueryClient();
 	const [confirmOpen, setConfirmOpen] = useState(false);
@@ -1622,10 +1903,9 @@ const ProjectItem = memo(function ProjectItem({
 		},
 		[sessionOrder, visibleSessions],
 	);
-	const [folderFilter, setFolderFilter] = useState("all");
-	const folderSessions = useMemo(
-		() => filterSessionsByFolder(sessions, folderFilter, workspace.workspaceRepos ?? []),
-		[folderFilter, sessions, workspace.workspaceRepos],
+	const rootSessions = useMemo(
+		() => (isMultiFolder ? sessions.filter((session) => !workspaceFolderRepoForSession(session, workspace.workspaceRepos)) : sessions),
+		[isMultiFolder, sessions, workspace.workspaceRepos],
 	);
 	// Publish the order shown here so keyboard navigation follows it.
 	useEffect(() => {
@@ -1638,7 +1918,7 @@ const ProjectItem = memo(function ProjectItem({
 		hiddenCount: hiddenSessionCount,
 		showAll: showAllSessions,
 		toggleShowAll: toggleShowAllSessions,
-	} = useShowMoreCap(folderSessions, SIDEBAR_PROJECT_SESSION_LIMIT, selection.activeSessionId);
+	} = useShowMoreCap(rootSessions, SIDEBAR_PROJECT_SESSION_LIMIT, selection.activeSessionId);
 	useLayoutEffect(() => {
 		const header = projectHeaderRef.current;
 		const content = projectSessionsRef.current;
@@ -2211,7 +2491,7 @@ const ProjectItem = memo(function ProjectItem({
 					{/* project-sidebar__sessions: indented under the project parent so worker
           sessions read as children without adding a persistent guide rail. */}
 		<AnimatePresence initial={false}>
-			{expanded && sessions.length > 0 && (
+			{expanded && (sessions.length > 0 || isMultiFolder) && (
 				<motion.div
 					key="sessions"
 					ref={projectSessionsRef}
@@ -2235,45 +2515,91 @@ const ProjectItem = memo(function ProjectItem({
 						exit={{ y: -12, opacity: 0 }}
 						transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }}
 					>
-						{workspace.workspaceRepos?.length ? <label className="flex items-center gap-2 px-4 pt-1 text-2xs text-muted-foreground">
-							<span>{t("shell.folderFilter", { defaultValue: "Folder" })}</span>
-							<select aria-label={t("shell.folderFilter", { defaultValue: "Folder" })} className="h-6 min-w-0 flex-1 rounded border border-sidebar-border bg-sidebar px-1.5 text-sidebar-foreground" value={folderFilter} onChange={(event) => setFolderFilter(event.target.value)}>
-								<option value="all">{t("shell.allFolders", { defaultValue: "All folders" })}</option>
-								<option value="__workspace_wide__">{t("shell.workspaceWide", { defaultValue: "Workspace-wide" })}</option>
-								{workspace.workspaceRepos.map((repo) => <option key={repo.relativePath} value={repo.relativePath}>{repo.name}</option>)}
-							</select>
-						</label> : null}
-											<SessionReorderList
-										dndId={sessionDndId(projectKey)}
-										testId={`session-list-${projectKey}`}
-												className={cn(
-													"mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1",
-													hiddenSessionCount > 0 ? "pb-px" : "pb-1",
-												)}
-												sessions={listedSessions}
-												repos={workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS}
-												sessionIds={listedSessionIds}
-												activeSessionId={selection.activeSessionId}
-												plain={projectDragInProgress}
-												onReorder={commitSessionOrder}
-												onKilled={handleSessionKilled}
-												onOpen={openSession}
-											/>
-											{hiddenSessionCount > 0 ? (
-												// Indented to the session list so its label starts on the status-dot column.
-												<div className="pl-4">
-													<ShowMoreRow
-														className="px-3"
-														expanded={showAllSessions}
-														label={
-															showAllSessions
-																? t("shell.showLessAgents")
-																: t("shell.showMoreAgents", { count: hiddenSessionCount })
-														}
-														onClick={toggleShowAllSessions}
-													/>
-												</div>
-											) : null}
+						{isMultiFolder ? (
+							<>
+								{rootSessions.length > 0 && (
+									<SessionReorderList
+										dndId={sessionDndId(`${projectKey}-root`)}
+										testId={`session-list-${projectKey}-root`}
+										className={cn(
+											"mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1 pb-1",
+										)}
+										sessions={listedSessions}
+										repos={workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS}
+										sessionIds={listedSessionIds}
+										activeSessionId={selection.activeSessionId}
+										plain={projectDragInProgress}
+										onReorder={commitSessionOrder}
+										onKilled={handleSessionKilled}
+										onOpen={openSession}
+									/>
+								)}
+								{hiddenSessionCount > 0 ? (
+									<div className="pl-4">
+										<ShowMoreRow
+											className="px-3"
+											expanded={showAllSessions}
+											label={
+												showAllSessions
+													? t("shell.showLessAgents")
+													: t("shell.showMoreAgents", { count: hiddenSessionCount })
+											}
+											onClick={toggleShowAllSessions}
+										/>
+									</div>
+								) : null}
+								{workspace.workspaceRepos?.map((repo) => (
+									<WorkspaceFolderBranch
+										key={repo.relativePath}
+										workspace={workspace}
+										repo={repo}
+										sessions={sessions.filter((session) =>
+											sessionMatchesWorkspaceFolder(session, repo.relativePath, workspace.workspaceRepos),
+										)}
+										selection={selection}
+										projectKey={projectKey}
+										projectDragInProgress={projectDragInProgress}
+										consumeDragClick={consumeDragClick}
+										onKilled={handleSessionKilled}
+										onOpenSession={openSession}
+									/>
+								))}
+							</>
+						) : (
+							<>
+								<SessionReorderList
+									dndId={sessionDndId(projectKey)}
+									testId={`session-list-${projectKey}`}
+									className={cn(
+										"mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1",
+										hiddenSessionCount > 0 ? "pb-px" : "pb-1",
+									)}
+									sessions={listedSessions}
+									repos={workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS}
+									sessionIds={listedSessionIds}
+									activeSessionId={selection.activeSessionId}
+									plain={projectDragInProgress}
+									onReorder={commitSessionOrder}
+									onKilled={handleSessionKilled}
+									onOpen={openSession}
+								/>
+								{hiddenSessionCount > 0 ? (
+									// Indented to the session list so its label starts on the status-dot column.
+									<div className="pl-4">
+										<ShowMoreRow
+											className="px-3"
+											expanded={showAllSessions}
+											label={
+												showAllSessions
+													? t("shell.showLessAgents")
+													: t("shell.showMoreAgents", { count: hiddenSessionCount })
+											}
+											onClick={toggleShowAllSessions}
+										/>
+									</div>
+								) : null}
+							</>
+						)}
 								</motion.div>
 							</div>
 							</motion.div>
@@ -2982,7 +3308,6 @@ const SessionRow = memo(function SessionRow({
 									{session.title}
 								</span>
 								{hostLabel ? <Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs"><span className="truncate">{hostLabel}</span></Badge> : null}
-								<WorkspaceFolderMarker session={session} repos={repos ?? []} />
 							</span>
 						</Pressable>
 					</div>

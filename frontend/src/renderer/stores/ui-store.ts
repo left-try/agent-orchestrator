@@ -250,7 +250,7 @@ export type UiState = {
 	// every request so a repeat press (even for the same project) still re-fires;
 	// the always-mounted NewTaskNavigator consumes it by opening the new chat
 	// page. Selection still lives in the URL — this is a one-shot action.
-	newTaskRequest: { projectId: string; hostId?: string; report?: boolean; nonce: number } | null;
+	newTaskRequest: { projectId: string; hostId?: string; folder?: string; report?: boolean; nonce: number } | null;
 	// Bumped after writing the new chat draft from outside the page, so an open
 	// composer reloads it.
 	newChatDraftRevision: number;
@@ -351,7 +351,7 @@ export type UiState = {
 	showGlobalToast: (title: string, body?: string, style?: GlobalToast["tone"] | GlobalToast["placement"] | GlobalToastOptions) => void;
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
-	requestNewTask: (projectId: string, hostId?: string, options?: { report?: boolean }) => void;
+	requestNewTask: (projectId: string, hostId?: string, options?: { report?: boolean; folder?: string }) => void;
 	openArchive: (request: Omit<ArchiveModalRequest, "nonce">) => void;
 	closeArchive: () => void;
 	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
@@ -937,7 +937,15 @@ export const useUiStore = create<UiState>((set, get) => ({
 			);
 			return;
 		}
-		set((state) => ({ newTaskRequest: { projectId, hostId, report: options?.report, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
+		set((state) => ({
+			newTaskRequest: {
+				projectId,
+				hostId,
+				report: options?.report,
+				folder: options?.folder,
+				nonce: (state.newTaskRequest?.nonce ?? 0) + 1,
+			},
+		}));
 	},
 	openArchive: (request) =>
 		set(() => {

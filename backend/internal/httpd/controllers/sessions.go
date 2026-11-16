@@ -397,7 +397,7 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 	}
 	// A standalone worker has no project to start in the background.
 	async := in.Async && in.ProjectID != ""
-	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, BaseBranch: strings.TrimSpace(in.BaseBranch), RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, DisplayNameExplicit: in.DisplayNameExplicit && displayName != "", Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", AgentAccountID: strings.TrimSpace(in.AccountID), ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash, Async: async})
+	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, BaseBranch: strings.TrimSpace(in.BaseBranch), WorkspaceFolder: strings.TrimSpace(in.WorkspaceFolder), RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, DisplayNameExplicit: in.DisplayNameExplicit && displayName != "", Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", AgentAccountID: strings.TrimSpace(in.AccountID), ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash, Async: async})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -2682,7 +2682,16 @@ func (c *SessionsController) spawnOrchestrator(w http.ResponseWriter, r *http.Re
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_APPROVAL_MODE", "approvalMode is invalid", nil)
 		return
 	}
-	sess, err := c.Svc.SpawnOrchestrator(r.Context(), in.ProjectID, in.Clean, in.Mode, in.ApprovalMode)
+	var sess domain.Session
+	var err error
+	folder := strings.TrimSpace(in.WorkspaceFolder)
+	if folderSvc, ok := c.Svc.(interface {
+		SpawnOrchestratorForFolder(ctx context.Context, projectID domain.ProjectID, workspaceFolder string, clean bool, requestedMode domain.SessionMode, approval domain.PermissionMode) (domain.Session, error)
+	}); ok {
+		sess, err = folderSvc.SpawnOrchestratorForFolder(r.Context(), in.ProjectID, folder, in.Clean, in.Mode, in.ApprovalMode)
+	} else {
+		sess, err = c.Svc.SpawnOrchestrator(r.Context(), in.ProjectID, in.Clean, in.Mode, in.ApprovalMode)
+	}
 	if err != nil {
 		envelope.WriteErrorWithCode(w, r, err, "ORCHESTRATOR_SPAWN_FAILED", "Unable to start orchestrator")
 		return

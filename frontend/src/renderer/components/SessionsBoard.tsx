@@ -1,5 +1,5 @@
 import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -60,7 +60,7 @@ import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useDiagnosticsEnabled, usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
 import { AppMemoryIndicator, toSessionFacts } from "./SessionMemoryPanel";
 import { Button } from "./ui/button";
-import { filterSessionsByFolder, workspaceFolderForSession } from "../lib/workspace-folder";
+import { sessionMatchesWorkspaceFolder } from "../lib/workspace-folder";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import {
 	BoardSessionCardAdapter,
@@ -71,9 +71,11 @@ type SessionsBoardProps = {
 	/** When set, the board shows only this project's sessions. */
 	projectId?: string;
 	hostId?: string;
+	/** When set, narrows the workspace board to one child folder's Kanban + orchestrator. */
+	folder?: string;
 };
 
-export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
+export function SessionsBoard({ projectId, hostId, folder }: SessionsBoardProps) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
@@ -82,9 +84,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const hostOffline = Boolean(hostId) && !connected;
 	const savedHost = hostId ? shell?.remoteHosts?.find((host) => host.hostId === hostId) : undefined;
 	const hostLabel = hostId ? labelForHost(hostId) ?? savedHost?.label ?? hostId : undefined;
-	const scopeKey = refKey({ host: hostId ?? LOCAL_HOST, id: projectId ?? "all" });
-	const [folderFilter, setFolderFilter] = useState("all");
-	useEffect(() => setFolderFilter("all"), [scopeKey]);
+	const activeFolder = folder?.trim() || undefined;
+	const scopeKey = refKey({ host: hostId ?? LOCAL_HOST, id: projectId ?? "all", folder: activeFolder ?? "" });
 	// Lanes follow the daemon's delivery order: building -> validating ->
 	// in review -> ready. The middle two are one review-feedback loop, split by
 	// whose turn it is.
@@ -96,6 +97,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		? remoteProjectQuery.data ? [remoteProjectQuery.data] : []
 		: projectId ? all.filter((candidate) => candidate.id === projectId) : all;
 	const workspace = projectId ? workspaces[0] : undefined;
+	const folderRepos = workspace?.workspaceRepos ?? [];
+	const folderRepo = activeFolder
+		? folderRepos.find((repo) => repo.relativePath === activeFolder || repo.name === activeFolder)
+		: undefined;
 	// A Freestyle cloud project's orchestrator starts in place (see
 	// OrchestratorStartingChat); its session does not exist yet, so the
 	// project's provider decides, as the control plane's does.
@@ -109,16 +114,23 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		projectSandboxProvider(cloudProject.config, offering) === FREESTYLE_PROVIDER;
 	// Board chrome stays route-oriented; project context remains in the sidebar.
 	const boardLabel = t("shell.board");
-	const liveSessions = workspaces.flatMap((workspace) => workerSessions(workspace.sessions)).filter((session) => !session.needsResume || isArchivedSession(session));
+	const folderLabel = folderRepo?.name ?? activeFolder;
+	const liveSessions = workspaces
+		.flatMap((candidate) => workerSessions(candidate.sessions))
+		.filter((session) => !session.needsResume || isArchivedSession(session))
+		.filter((session) => !activeFolder || sessionMatchesWorkspaceFolder(session, activeFolder, folderRepos));
 	const demoWorkspaceId = projectId ?? workspaces[0]?.id;
-	const sessions = !hostId && usesPreviewWorkspaceData && demoWorkspaceId && liveSessions.length === 0
+	const sessions = !hostId && usesPreviewWorkspaceData && demoWorkspaceId && liveSessions.length === 0 && !activeFolder
 		? demoBoardSessions(demoWorkspaceId)
 		: liveSessions;
-	const orchestrator = projectId ? newestActiveOrchestrator(workspaces[0]?.sessions ?? []) : undefined;
+	const orchestrator = projectId
+		? newestActiveOrchestrator(workspaces[0]?.sessions ?? [], activeFolder ?? "")
+		: undefined;
 	const projectActions = useProjectOrchestratorAction({
 		projectId,
 		project: workspace,
 		orchestrator,
+		folder: activeFolder,
 		source: "board",
 		hostId,
 	});
@@ -158,7 +170,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
-	const health = workspace ? orchestratorHealth(workspace, isProjectRestarting) : { state: "ok" as const };
+	const health = workspace ? orchestratorHealth(workspace, isProjectRestarting, activeFolder ?? "") : { state: "ok" as const };
 	// Someone this project was shared with works through what was shared and
 	// the owner's orchestrator: they can't start tasks or an orchestrator
 	// here, so the board offers neither and doesn't ask them to.
@@ -169,26 +181,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	// Who is in each shared cloud session, read without joining any of them.
 	const participantsBySession = useSessionParticipants(activeSessions, !hostId);
 	const { userId: cloudUserId } = useCloudCp(!hostId && activeSessions.some((session) => Boolean(session.cloud)));
-	const folderRepos = workspace?.workspaceRepos ?? [];
-	const globalFolderOptions = !projectId ? all.flatMap((candidate) => (candidate.workspaceRepos ?? []).map((repo) => ({
-		value: `${candidate.id}::${repo.relativePath}`,
-		label: `${candidate.name} / ${repo.name}`,
-		workspaceId: candidate.id,
-		relativePath: repo.relativePath,
-	}))) : [];
-	const boardSessions = (projectId
-		? filterSessionsByFolder(activeSessions, folderFilter, folderRepos)
-		: folderFilter === "all"
-			? activeSessions
-			: folderFilter === "__workspace_wide__"
-				? activeSessions.filter((session) => {
-					const repos = all.find((candidate) => candidate.id === session.workspaceId)?.workspaceRepos ?? [];
-					return repos.length === 0 || workspaceFolderForSession(session, repos).id === "__workspace_wide__";
-				})
-				: activeSessions.filter((session) => {
-					const option = globalFolderOptions.find((candidate) => candidate.value === folderFilter);
-					return Boolean(option && session.workspaceId === option.workspaceId && session.workspaceFolder === option.relativePath);
-				})).map((session) =>
+	const boardSessions = activeSessions.map((session) =>
 		session.status === "no_signal" || session.displayStatus === "No signal"
 			? { ...session, kanbanColumn: "building" as const }
 			: session,
@@ -254,7 +247,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			setProjectRestarting(projectId, true, hostId);
 			setOrchestratorStartupError(projectId, null, hostId);
 			try {
-				const sessionId = await openRemoteOrchestrator(hostId, projectId, orchestrator, undefined, true, "restart");
+				const sessionId = await openRemoteOrchestrator(hostId, projectId, orchestrator, undefined, true, "restart", activeFolder);
 				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				if (activeScopeRef.current === scopeKey) void navigate(sessionNavigateTarget(projectId, sessionId, hostId));
 			} catch (error) {
@@ -270,6 +263,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			navigate,
 			setProjectRestarting,
 			setOrchestratorReplacementError,
+			workspaceFolder: activeFolder,
 		});
 	};
 
@@ -287,8 +281,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		return <OrchestratorStartingChat
 			cloud={workspace?.kind === CLOUD_PROJECT_KIND || autoStartPending}
 			freestyle={startsInPlace || autoStartPending}
-			coderWorkspaceUrl={workspace?.sessions.find((session) => session.kind === "orchestrator")?.cloud?.coderWorkspaceUrl}
-			harness={workspace?.orchestratorAgent ?? workspace?.sessions.find((session) => session.kind === "orchestrator")?.provider}
+			coderWorkspaceUrl={orchestrator?.cloud?.coderWorkspaceUrl}
+			harness={workspace?.orchestratorAgent ?? orchestrator?.provider}
 		/>;
 	}
 
@@ -300,6 +294,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						data-testid="board-topbar-label"
 					>
 						{boardLabel}
+						{folderLabel ? <span className="truncate text-muted-foreground">· {folderLabel}</span> : null}
 						{hostLabel ? <span className="truncate text-muted-foreground">· {hostLabel}</span> : null}
 					</PageTopbarTitle>
 				)}
@@ -361,20 +356,9 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 				) : showProjectEmpty ? (
 					<ProjectBoardEmpty
 						actions={guest ? null : <ProjectBoardActions actions={projectActions} placement="empty" />}
-						offer={projectId && !hostId ? <ProjectImportOffer className="mt-8 w-full text-left" projectId={projectId} /> : null}
+						offer={projectId && !hostId && !activeFolder ? <ProjectImportOffer className="mt-8 w-full text-left" projectId={projectId} /> : null}
 					/>
 				) : (
-					<div className="flex h-full min-h-0 flex-col">
-						{(projectId ? folderRepos.length > 0 : globalFolderOptions.length > 0) ? <label className="flex shrink-0 items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
-							<span>{t("shell.folderFilter", { defaultValue: "Folder" })}</span>
-							<select aria-label={t("shell.folderFilter", { defaultValue: "Folder" })} className="h-7 rounded-md border border-border bg-background px-2 text-foreground" value={folderFilter} onChange={(event) => setFolderFilter(event.target.value)}>
-								<option value="all">{t("shell.allFolders", { defaultValue: "All folders" })}</option>
-								<option value="__workspace_wide__">{t("shell.workspaceWide", { defaultValue: "Workspace-wide" })}</option>
-								{projectId
-									? folderRepos.map((repo) => <option key={repo.relativePath} value={repo.relativePath}>{repo.name}</option>)
-									: globalFolderOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-							</select>
-						</label> : null}
 					<SessionsBoardGridView
 						columns={columns}
 						key={scopeKey}
@@ -390,12 +374,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 								onOpenArtifacts={() => openSessionArtifacts(session)}
 								onTerminate={!hostId || connected ? ({ deleteArtifacts }) => terminateSession.mutate({ ...session, deleteArtifacts }) : undefined}
 								session={session}
-								repos={all.find((candidate) => candidate.id === session.workspaceId)?.workspaceRepos ?? folderRepos}
 							/>
 						)}
 						sessions={boardSessions}
 					/>
-					</div>
 				)}
 			</div>
 

@@ -22,6 +22,7 @@ const maxDisplayNameLen = 100
 
 type spawnOptions struct {
 	project         string
+	folder          string
 	standalone      bool
 	harness         string
 	kind            string
@@ -45,6 +46,7 @@ type spawnOptions struct {
 // POST /api/v1/sessions. The CLI keeps its own copy so it need not import httpd.
 type spawnRequest struct {
 	ProjectID           string `json:"projectId,omitempty"`
+	WorkspaceFolder     string `json:"workspaceFolder,omitempty"`
 	IssueID             string `json:"issueId,omitempty"`
 	ParentSessionID     string `json:"parentSessionId,omitempty"`
 	TrackerProvider     string `json:"trackerProvider,omitempty"`
@@ -123,8 +125,8 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				if opts.kind == "orchestrator" {
 					return usageError{fmt.Errorf("standalone sessions must be workers")}
 				}
-				if strings.TrimSpace(opts.branch) != "" || strings.TrimSpace(opts.baseBranch) != "" || strings.TrimSpace(opts.issue) != "" || strings.TrimSpace(opts.claimPR) != "" {
-					return usageError{fmt.Errorf("standalone sessions do not support --branch, --base, --issue, or --claim-pr")}
+				if strings.TrimSpace(opts.branch) != "" || strings.TrimSpace(opts.baseBranch) != "" || strings.TrimSpace(opts.issue) != "" || strings.TrimSpace(opts.claimPR) != "" || strings.TrimSpace(opts.folder) != "" {
+					return usageError{fmt.Errorf("standalone sessions do not support --branch, --base, --issue, --claim-pr, or --folder")}
 				}
 				if strings.TrimSpace(opts.harness) == "" {
 					return usageError{fmt.Errorf("--agent is required with --standalone")}
@@ -167,6 +169,9 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				if strings.TrimSpace(opts.claimPR) != "" {
 					return usageError{fmt.Errorf("scratch projects do not support --claim-pr")}
 				}
+				if strings.TrimSpace(opts.folder) != "" {
+					return usageError{fmt.Errorf("scratch projects do not support --folder")}
+				}
 			}
 
 			if !opts.skipAgentCheck {
@@ -183,6 +188,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			}
 			req := spawnRequest{
 				ProjectID:           opts.project,
+				WorkspaceFolder:     strings.TrimSpace(opts.folder),
 				IssueID:             opts.issue,
 				ParentSessionID:     strings.TrimSpace(os.Getenv("AO_SESSION_ID")),
 				TrackerProvider:     opts.trackerProvider,
@@ -257,6 +263,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 		return pflag.NormalizedName(name)
 	})
 	f.StringVar(&opts.project, "project", "", "Project id to spawn the session in (default: AO_PROJECT_ID or the current registered repo)")
+	f.StringVar(&opts.folder, "folder", "", "Child folder relative path inside a workspace project (scopes the session to that folder)")
 	f.BoolVar(&opts.standalone, "standalone", false, "Spawn a projectless worker in an Orchestrator-managed plain directory (requires --agent)")
 	f.StringVar(&opts.harness, "harness", "", "Agent harness / --agent: claude-code, codex, aider, opencode, opencode-v2, grok, droid, amp, agy, crush, cursor, qwen, gemini, copilot, goose, auggie, continue, devin, cline, kimi, muse, kiro, kilocode, vibe, pi, kimchi, prime-agent, autohand, omp, fx, unreal-agent, mimo-code, deepseek-harness, openhands, command-code, memcode, hermes (default: project worker.agent; orchestrator spawns default to project orchestrator.agent; required if the project has none)")
 	f.StringVar(&opts.kind, "kind", "", "Session role: worker or orchestrator (default: worker)")

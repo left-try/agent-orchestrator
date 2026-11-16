@@ -52,7 +52,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { someoneElseWorking, type SessionPerson } from "../lib/session-people";
 import { SessionPeopleStack } from "./SessionPeople";
 import { SessionOwnerTag } from "./SessionOwnerTag";
-import { WorkspaceFolderMarker } from "./WorkspaceFolderMarker";
 
 export function toBoardSessionPresentation(
 	session: WorkspaceSession,
@@ -339,7 +338,6 @@ function DesktopSessionCard({
 	) : undefined;
 
 	const card = (
-		<>
 		<SessionCardView
 			action={action}
 			artifacts={
@@ -399,8 +397,6 @@ function DesktopSessionCard({
 			still={still}
 			translate={translate}
 		/>
-		<div className="px-3 pb-2"><WorkspaceFolderMarker session={session} repos={repos} /></div>
-		</>
 	);
 	if (!interactive) return card;
 	return (

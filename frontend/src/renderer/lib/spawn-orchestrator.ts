@@ -65,10 +65,17 @@ export async function spawnOrchestrator(
 	mode?: SessionMode,
 	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions",
 	hostId?: string,
+	workspaceFolder?: string,
 ): Promise<string> {
 	try {
 		const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/orchestrators", {
-			body: { projectId, clean, ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) },
+			body: {
+				projectId,
+				clean,
+				...(mode ? { mode } : {}),
+				...(approvalMode ? { approvalMode } : {}),
+				...(workspaceFolder ? { workspaceFolder } : {}),
+			},
 		});
 
 		if (error || !data?.orchestrator?.id) {

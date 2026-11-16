@@ -185,8 +185,9 @@ type ConversationRecord struct {
 	// ProjectID is set for both scopes. SessionID is the session currently
 	// controlling the conversation; for project-scoped orchestrators it changes
 	// on clean replacement while the conversation identity remains stable.
-	ProjectID ProjectID `json:"projectId"`
-	SessionID SessionID `json:"sessionId,omitempty"`
+	ProjectID       ProjectID `json:"projectId"`
+	WorkspaceFolder string    `json:"workspaceFolder,omitempty"`
+	SessionID       SessionID `json:"sessionId,omitempty"`
 	ReviewID  string    `json:"reviewId,omitempty"`
 	// ActiveBranchID identifies the one provider-thread lineage the session may
 	// write. Sibling branches remain durable and are selected by moving this head;

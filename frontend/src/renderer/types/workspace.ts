@@ -399,13 +399,19 @@ export function isOrchestratorSession(session: Pick<WorkspaceSession, "id" | "ki
 export function findProjectOrchestrator(
 	workspaces: WorkspaceSummary[],
 	projectId: string,
+	folder = "",
 ): WorkspaceSession | undefined {
 	const workspace = workspaces.find((w) => w.id === projectId);
-	return newestActiveOrchestrator(workspace?.sessions ?? []);
+	return newestActiveOrchestrator(workspace?.sessions ?? [], folder);
 }
 
-export function newestActiveOrchestrator(sessions: WorkspaceSession[]): WorkspaceSession | undefined {
-	const active = sessions.filter((session) => isOrchestratorSession(session) && sessionIsActive(session));
+export function newestActiveOrchestrator(sessions: WorkspaceSession[], folder = ""): WorkspaceSession | undefined {
+	const active = sessions.filter(
+		(session) =>
+			isOrchestratorSession(session) &&
+			sessionIsActive(session) &&
+			(session.workspaceFolder ?? "") === folder,
+	);
 	return active.reduce<WorkspaceSession | undefined>(
 		(newest, session) => (!newest || sessionNewer(session, newest) ? session : newest),
 		undefined,
@@ -603,14 +609,19 @@ export type OrchestratorHealth =
 	| { state: "missing"; message: string }
 	| { state: "duplicates"; message: string };
 
-export function orchestratorHealth(workspace: WorkspaceSummary, restarting = false): OrchestratorHealth {
+export function orchestratorHealth(workspace: WorkspaceSummary, restarting = false, folder = ""): OrchestratorHealth {
 	if (restarting) {
 		return {
 			state: "restarting",
 			message: "Restarting orchestrator. New tasks wait until the replacement is ready.",
 		};
 	}
-	const active = workspace.sessions.filter((session) => isOrchestratorSession(session) && sessionIsActive(session));
+	const active = workspace.sessions.filter(
+		(session) =>
+			isOrchestratorSession(session) &&
+			sessionIsActive(session) &&
+			(session.workspaceFolder ?? "") === folder,
+	);
 	if (active.length > 1) {
 		return {
 			state: "duplicates",
@@ -618,7 +629,7 @@ export function orchestratorHealth(workspace: WorkspaceSummary, restarting = fal
 				"Multiple orchestrators are active. The newest one is used; stale ones will be cleaned up on daemon reconcile.",
 		};
 	}
-	const orchestrator = newestActiveOrchestrator(workspace.sessions);
+	const orchestrator = newestActiveOrchestrator(workspace.sessions, folder);
 	if (!orchestrator) {
 		return { state: "missing", message: "No orchestrator is running for this project." };
 	}

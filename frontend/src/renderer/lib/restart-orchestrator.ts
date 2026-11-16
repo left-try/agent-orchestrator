@@ -18,6 +18,7 @@ type RestartProjectOrchestratorOptions = {
 	onError?: (error: unknown) => void;
 	mode?: SessionMode;
 	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+	workspaceFolder?: string;
 };
 
 async function refreshWorkspaceState(queryClient: QueryClient) {
@@ -38,6 +39,7 @@ export async function restartProjectOrchestrator({
 	onError,
 	mode,
 	approvalMode,
+	workspaceFolder,
 }: RestartProjectOrchestratorOptions) {
 	// Keep the initiating control focused while the restart is pending so
 	// keyboard users retain a focus target for the duration of the operation;
@@ -48,7 +50,7 @@ export async function restartProjectOrchestrator({
 	setProjectRestarting(projectId, true);
 	// Keep any replacement-error dialog mounted so Retry retains focus while pending.
 	try {
-		const sessionId = await spawnOrchestrator(projectId, "restart", true, mode, approvalMode);
+		const sessionId = await spawnOrchestrator(projectId, "restart", true, mode, approvalMode, undefined, workspaceFolder);
 		await refreshWorkspaceState(queryClient);
 		setOrchestratorReplacementError(projectId, null);
 		if (activeElement instanceof HTMLElement) activeElement.blur();

@@ -234,7 +234,9 @@ type Service struct {
 	agentReadiness      ports.AgentReadinessProvider
 	runBackground       func(func())
 	orchestratorLocksMu sync.Mutex
-	orchestratorLocks   map[domain.ProjectID]*sync.Mutex
+	orchestratorLocks   map[orchestratorLockKey]*sync.Mutex
+	folderCacheMu       sync.Mutex
+	folderCache         map[domain.SessionID]workspaceFolderCacheEntry
 	workspaceCache      *workspaceCache
 	workspaceManifests  *workspaceManifestIndex
 	// commitSelections caches resolved commit selections. Their keys are
@@ -412,10 +414,11 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 	if cfg.Kind == domain.KindOrchestrator {
 		cfg.Async = true
-		unlock := s.lockOrchestratorProject(cfg.ProjectID)
+		cfg.WorkspaceFolder = strings.TrimSpace(cfg.WorkspaceFolder)
+		unlock := s.lockOrchestratorProjectFolder(cfg.ProjectID, cfg.WorkspaceFolder)
 		defer unlock()
 
-		existing, err := s.activeOrchestrators(ctx, cfg.ProjectID)
+		existing, err := s.activeOrchestratorsForFolder(ctx, cfg.ProjectID, cfg.WorkspaceFolder)
 		if err != nil {
 			return domain.Session{}, 0, 0, err
 		}
@@ -441,12 +444,26 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
 	var project domain.ProjectRecord
 	var err error
+	cfg.WorkspaceFolder = strings.TrimSpace(cfg.WorkspaceFolder)
 	if cfg.ProjectID != "" {
 		project, err = s.requireProject(ctx, cfg.ProjectID)
 		if err != nil {
 			return domain.Session{}, 0, 0, err
 		}
+		if cfg.Kind == domain.KindWorker && cfg.WorkspaceFolder == "" && cfg.ParentSessionID != "" && s.store != nil {
+			if parent, ok, parentErr := s.store.GetSession(ctx, cfg.ParentSessionID); parentErr == nil && ok &&
+				parent.ProjectID == cfg.ProjectID && parent.Metadata.WorkspaceFolder != "" {
+				cfg.WorkspaceFolder = parent.Metadata.WorkspaceFolder
+			}
+		}
+		cfg.WorkspaceFolder, err = s.validateWorkspaceFolder(ctx, project, cfg.WorkspaceFolder)
+		if err != nil {
+			return domain.Session{}, 0, 0, err
+		}
 	} else {
+		if cfg.WorkspaceFolder != "" {
+			return domain.Session{}, 0, 0, apierr.Invalid("INVALID_WORKSPACE_FOLDER", "workspaceFolder is only valid for workspace projects", nil)
+		}
 		if cfg.IssueID != "" || strings.TrimSpace(cfg.Branch) != "" {
 			return domain.Session{}, 0, 0, apierr.Invalid("STANDALONE_PROJECT_FEATURE_UNSUPPORTED", "Standalone sessions do not support issues or branches", nil)
 		}
@@ -856,7 +873,24 @@ func (s *Service) SpawnOrchestrator(
 	requestedMode domain.SessionMode,
 	approval domain.PermissionMode,
 ) (domain.Session, error) {
+	return s.SpawnOrchestratorForFolder(ctx, projectID, "", clean, requestedMode, approval)
+}
+
+// SpawnOrchestratorForFolder spawns either a project's main orchestrator
+// (workspaceFolder == "") or a folder-scoped orchestrator for a workspace repo.
+func (s *Service) SpawnOrchestratorForFolder(
+	ctx context.Context,
+	projectID domain.ProjectID,
+	workspaceFolder string,
+	clean bool,
+	requestedMode domain.SessionMode,
+	approval domain.PermissionMode,
+) (domain.Session, error) {
 	project, err := s.requireProject(ctx, projectID)
+	if err != nil {
+		return domain.Session{}, err
+	}
+	workspaceFolder, err = s.validateWorkspaceFolder(ctx, project, workspaceFolder)
 	if err != nil {
 		return domain.Session{}, err
 	}
@@ -872,12 +906,12 @@ func (s *Service) SpawnOrchestrator(
 	}
 	_, cancelBudget := ports.ExtendSpawnRequestBudget(ctx, budget)
 	defer cancelBudget()
-	unlock := s.lockOrchestratorProject(projectID)
+	unlock := s.lockOrchestratorProjectFolder(projectID, workspaceFolder)
 	defer unlock()
 
 	mode := requestedMode
 	if clean {
-		existing, err := s.activeOrchestrators(ctx, projectID)
+		existing, err := s.activeOrchestratorsForFolder(ctx, projectID, workspaceFolder)
 		if err != nil {
 			return domain.Session{}, err
 		}
@@ -907,7 +941,7 @@ func (s *Service) SpawnOrchestrator(
 			}
 		}
 	} else {
-		existing, err := s.activeOrchestrators(ctx, projectID)
+		existing, err := s.activeOrchestratorsForFolder(ctx, projectID, workspaceFolder)
 		if err != nil {
 			return domain.Session{}, err
 		}
@@ -916,10 +950,11 @@ func (s *Service) SpawnOrchestrator(
 		}
 	}
 	sess, _, _, err := s.spawn(ctx, ports.SpawnConfig{
-		ProjectID:     projectID,
-		Kind:          domain.KindOrchestrator,
-		Async:         true,
-		RequestedMode: mode,
+		ProjectID:       projectID,
+		Kind:            domain.KindOrchestrator,
+		Async:           true,
+		RequestedMode:   mode,
+		WorkspaceFolder: workspaceFolder,
 		AgentConfig: ports.AgentConfig{
 			Permissions: approval,
 		},
@@ -933,9 +968,51 @@ func (s *Service) SpawnOrchestrator(
 	return sess, nil
 }
 
+func (s *Service) validateWorkspaceFolder(ctx context.Context, project domain.ProjectRecord, folder string) (string, error) {
+	trimmed := strings.TrimSpace(folder)
+	if trimmed == "" {
+		return "", nil
+	}
+	if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
+		return "", apierr.Invalid("INVALID_WORKSPACE_FOLDER", "workspaceFolder is only valid for workspace projects", nil)
+	}
+	cleaned := cleanWorkspaceFolderRel(trimmed)
+	if cleaned == "" {
+		return "", apierr.Invalid("INVALID_WORKSPACE_FOLDER", "Invalid workspace folder path", map[string]any{"workspaceFolder": folder})
+	}
+	repos, err := s.store.ListWorkspaceRepos(ctx, project.ID)
+	if err != nil {
+		return "", fmt.Errorf("list workspace repos %s: %w", project.ID, err)
+	}
+	for _, repo := range repos {
+		if repo.GitStatus.WithDefault() != domain.GitStatusReady {
+			continue
+		}
+		if rel := cleanWorkspaceFolderRel(repo.RelativePath); rel != "" && rel == cleaned {
+			return rel, nil
+		}
+	}
+	return "", apierr.Invalid("INVALID_WORKSPACE_FOLDER", fmt.Sprintf("Unknown or unready workspace folder %q", trimmed), map[string]any{"workspaceFolder": folder})
+}
+
 func (s *Service) activeOrchestrators(ctx context.Context, projectID domain.ProjectID) ([]domain.Session, error) {
 	active := true
 	return s.List(ctx, ListFilter{ProjectID: projectID, Active: &active, OrchestratorOnly: true})
+}
+
+func (s *Service) activeOrchestratorsForFolder(ctx context.Context, projectID domain.ProjectID, workspaceFolder string) ([]domain.Session, error) {
+	all, err := s.activeOrchestrators(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	target := strings.TrimSpace(workspaceFolder)
+	filtered := make([]domain.Session, 0, len(all))
+	for _, sess := range all {
+		if strings.TrimSpace(sess.Metadata.WorkspaceFolder) == target {
+			filtered = append(filtered, sess)
+		}
+	}
+	return filtered, nil
 }
 
 const orchestratorRetireNotice = "AO is replacing this project orchestrator. Stop coordinating new work now; a fresh orchestrator will take over in a new workspace."
@@ -957,7 +1034,10 @@ func (s *Service) verifyOrchestratorReplacement(project domain.ProjectRecord, se
 	if expected := project.Config.Orchestrator.Harness; expected != "" && sess.Harness != expected {
 		return orchestratorReplacementUnverified("new session %s uses harness %q, want %q", sess.ID, sess.Harness, expected)
 	}
-	expectedBranch := sessionmanager.DefaultOrchestratorBranch(serviceSessionPrefix(project), s.dataDir)
+	expectedBranch := sessionmanager.DefaultSpawnBranch(sess.ID, domain.KindOrchestrator, serviceSessionPrefix(project), project.Kind.WithDefault(), s.dataDir)
+	if expectedBranch == "" {
+		expectedBranch = sessionmanager.DefaultOrchestratorBranch(serviceSessionPrefix(project), s.dataDir)
+	}
 	if branch := sess.Metadata.Branch; branch != "" && !isOrchestratorBranch(branch, expectedBranch) {
 		return orchestratorReplacementUnverified("new session %s uses branch %q, want %q", sess.ID, branch, expectedBranch)
 	}
@@ -1016,15 +1096,25 @@ func sessionNewer(a, b domain.SessionRecord) bool {
 	return string(a.ID) > string(b.ID)
 }
 
+type orchestratorLockKey struct {
+	projectID domain.ProjectID
+	folder    string
+}
+
 func (s *Service) lockOrchestratorProject(projectID domain.ProjectID) func() {
+	return s.lockOrchestratorProjectFolder(projectID, "")
+}
+
+func (s *Service) lockOrchestratorProjectFolder(projectID domain.ProjectID, workspaceFolder string) func() {
+	key := orchestratorLockKey{projectID: projectID, folder: strings.TrimSpace(workspaceFolder)}
 	s.orchestratorLocksMu.Lock()
 	if s.orchestratorLocks == nil {
-		s.orchestratorLocks = make(map[domain.ProjectID]*sync.Mutex)
+		s.orchestratorLocks = make(map[orchestratorLockKey]*sync.Mutex)
 	}
-	mu := s.orchestratorLocks[projectID]
+	mu := s.orchestratorLocks[key]
 	if mu == nil {
 		mu = &sync.Mutex{}
-		s.orchestratorLocks[projectID] = mu
+		s.orchestratorLocks[key] = mu
 	}
 	s.orchestratorLocksMu.Unlock()
 
@@ -1700,6 +1790,7 @@ func (s *Service) sessionsFromRecords(ctx context.Context, filtered []domain.Ses
 	if err != nil {
 		return nil, fmt.Errorf("list pr facts: %w", err)
 	}
+	filtered = s.attributeSessionRecordsWorkspaceFolders(ctx, filtered, prsBySession)
 	runsBySession, err := s.store.ListCurrentHeadReviewRunsForSessions(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("list review runs: %w", err)
@@ -2215,6 +2306,7 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("pr facts %s: %w", rec.ID, err)
 	}
+	rec = s.attributeSessionRecordWorkspaceFolder(ctx, rec, prs)
 	runs, err := s.currentHeadReviewRuns(ctx, rec, prs)
 	if err != nil {
 		return domain.Session{}, err

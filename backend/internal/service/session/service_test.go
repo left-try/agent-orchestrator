@@ -4490,6 +4490,72 @@ func TestSpawnOrchestratorNoCleanReturnsExistingWhenActiveExists(t *testing.T) {
 	}
 }
 
+func TestSpawnOrchestratorForFolderIndependentLifecycle(t *testing.T) {
+	st := newFakeStore()
+	st.projects["ws"] = domain.ProjectRecord{
+		ID:   "ws",
+		Kind: domain.ProjectKindWorkspace,
+	}
+	st.workspaceRepos["ws"] = []domain.WorkspaceRepoRecord{
+		{Name: "api", RelativePath: "services/api", GitStatus: domain.GitStatusReady},
+		{Name: "web", RelativePath: "apps/web", GitStatus: domain.GitStatusReady},
+	}
+	// Active main orchestrator
+	st.sessions["ws-main"] = domain.SessionRecord{
+		ID:        "ws-main",
+		ProjectID: "ws",
+		Kind:      domain.KindOrchestrator,
+		Metadata:  domain.SessionMetadata{WorkspaceFolder: ""},
+	}
+
+	fc := &fakeCommander{}
+	svc := &Service{manager: fc, store: st}
+
+	// 1. Spawning folder orchestrator for services/api returns new orchestrator without touching ws-main
+	fc.spawnRecord = domain.SessionRecord{
+		ID:        "ws-api",
+		ProjectID: "ws",
+		Kind:      domain.KindOrchestrator,
+		Metadata:  domain.SessionMetadata{WorkspaceFolder: "services/api"},
+	}
+	got, err := svc.SpawnOrchestratorForFolder(context.Background(), "ws", "services/api", false, "", "")
+	if err != nil {
+		t.Fatalf("SpawnOrchestratorForFolder: %v", err)
+	}
+	if got.ID != "ws-api" {
+		t.Fatalf("got id = %q, want ws-api", got.ID)
+	}
+	if len(fc.killed) != 0 {
+		t.Fatalf("main orchestrator should not be killed when spawning folder orchestrator: %v", fc.killed)
+	}
+
+	// 2. Clean spawn for services/api retires existing folder orchestrator but preserves main orchestrator
+	st.sessions["ws-api"] = fc.spawnRecord
+	fc.spawned = false
+	fc.spawnRecord = domain.SessionRecord{
+		ID:        "ws-api-2",
+		ProjectID: "ws",
+		Kind:      domain.KindOrchestrator,
+		Metadata:  domain.SessionMetadata{WorkspaceFolder: "services/api"},
+	}
+	got2, err := svc.SpawnOrchestratorForFolder(context.Background(), "ws", "services/api", true, "", "")
+	if err != nil {
+		t.Fatalf("SpawnOrchestratorForFolder clean: %v", err)
+	}
+	if got2.ID != "ws-api-2" {
+		t.Fatalf("got2 id = %q, want ws-api-2", got2.ID)
+	}
+	if len(fc.retired) != 1 || fc.retired[0] != "ws-api" {
+		t.Fatalf("expected only ws-api to be retired, got %v", fc.retired)
+	}
+
+	// 3. Spawning with invalid folder returns error
+	_, err = svc.SpawnOrchestratorForFolder(context.Background(), "ws", "nonexistent", false, "", "")
+	if err == nil {
+		t.Fatal("expected error for nonexistent folder in workspace")
+	}
+}
+
 // TestSpawnOrchestratorNoCleanSpawnsWhenNoneExists: clean=false spawns a new
 // orchestrator when no active one exists for the project.
 func TestSpawnOrchestratorNoCleanSpawnsWhenNoneExists(t *testing.T) {

@@ -26,6 +26,7 @@ ao spawn [flags]
 | `--output artifact` | Ask the worker for a file in its artifact directory instead of a PR | Ordinary task |
 | `--no-takeover` | Refuse if another active session owns the claimed PR (requires `--claim-pr`) | - |
 | `--project string` | Project id to spawn the session in | Optional when `--standalone` is used; defaults to `AO_PROJECT_ID` or the current repo's registered project |
+| `--folder string` | Child folder relative path inside a workspace project | - |
 | `--standalone` | Spawn a projectless worker session in an Orchestrator-managed directory | Disabled when `--project` is set |
 | `--prompt string` | Initial prompt for the agent | - |
 | `--skip-agent-check` | Skip CLI readiness warnings; the daemon still validates launch readiness | - |

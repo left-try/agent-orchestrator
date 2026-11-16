@@ -6130,8 +6130,11 @@ func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now t
 		Activity:            domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
 		// Resolved before this point and persisted here. There is no UPDATE
 		// statement that can change it afterwards.
-		Mode:              domain.NormalizeSessionMode(cfg.RequestedMode),
-		Metadata:          domain.SessionMetadata{Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions},
+		Mode: domain.NormalizeSessionMode(cfg.RequestedMode),
+		Metadata: domain.SessionMetadata{
+			WorkspaceFolder: cfg.WorkspaceFolder,
+			Permissions:     applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions,
+		},
 		RequestedOutput:   cfg.RequestedOutput,
 		OutputType:        domain.SessionOutputNone,
 		AutoReviewEnabled: projectConfig.AutoReview,
@@ -6338,12 +6341,29 @@ func appendAttachmentReferences(prompt string, refs []string) string {
 // standing instructions rather than part of the human's task request. A
 // promptless spawn delivers no user prompt at all: the agent simply lands at an
 // empty input box rather than receiving an auto-generated kickoff turn.
+type spawnWorkspaceFolderKey struct{}
+
+func withSpawnWorkspaceFolder(ctx context.Context, workspaceFolder string) context.Context {
+	if workspaceFolder == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, spawnWorkspaceFolderKey{}, workspaceFolder)
+}
+
+func spawnWorkspaceFolderFromContext(ctx context.Context) string {
+	folder, _ := ctx.Value(spawnWorkspaceFolderKey{}).(string)
+	return folder
+}
+
 func (m *Manager) buildSpawnTexts(ctx context.Context, cfg ports.SpawnConfig, sessionID domain.SessionID) (prompt, systemPrompt string, err error) {
 	prompt = buildPrompt(cfg)
 	if cfg.Fork != nil {
 		// The lineage row is written after spawn returns, so name the
 		// original here; restores read it from the lineage.
 		ctx = withForkOrigin(ctx, cfg.Fork.SourceSessionID, cfg.Fork.SourceTitle, cfg.Fork.SourceWorkspace)
+	}
+	if cfg.WorkspaceFolder != "" {
+		ctx = withSpawnWorkspaceFolder(ctx, cfg.WorkspaceFolder)
 	}
 	systemPrompt, err = m.buildSystemPrompt(ctx, cfg.Kind, cfg.ProjectID, sessionID, cfg.RequestedOutput, domain.NormalizeSessionMode(cfg.RequestedMode) == domain.SessionModeChat)
 	if err != nil {
@@ -6363,6 +6383,12 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	project, err := m.loadProject(ctx, projectID)
 	if err != nil {
 		return "", err
+	}
+	workspaceFolder := spawnWorkspaceFolderFromContext(ctx)
+	if workspaceFolder == "" && sessionID != "" {
+		if rec, ok, getErr := m.store.GetSession(ctx, sessionID); getErr == nil && ok {
+			workspaceFolder = rec.Metadata.WorkspaceFolder
+		}
 	}
 	cfg := systemPromptConfig{
 		Role:       promptRoleForKind(kind),
@@ -6384,7 +6410,7 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		cfg.OrchestratorRules = rules
 	case domain.KindWorker:
 		if projectID != "" {
-			orchestratorID, ok, err := m.activeOrchestratorSessionID(ctx, projectID)
+			orchestratorID, ok, err := m.activeOrchestratorSessionID(ctx, projectID, workspaceFolder)
 			if err != nil {
 				return "", err
 			}
@@ -6407,7 +6433,7 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	}
 
 	if projectID != "" {
-		workspacePrompt, err := m.workspaceProjectPrompt(ctx, kind, projectID)
+		workspacePrompt, err := m.workspaceProjectPrompt(ctx, kind, projectID, workspaceFolder)
 		if err != nil {
 			return "", err
 		}
@@ -6481,7 +6507,7 @@ func (m *Manager) aoSkillPointer(chat bool) string {
 		"Do not use a built-in visualize skill."
 }
 
-func (m *Manager) workspaceProjectPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID) (string, error) {
+func (m *Manager) workspaceProjectPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, workspaceFolder string) (string, error) {
 	project, err := m.loadProject(ctx, projectID)
 	if err != nil {
 		return "", err
@@ -6495,23 +6521,33 @@ func (m *Manager) workspaceProjectPrompt(ctx context.Context, kind domain.Sessio
 	}
 	switch kind {
 	case domain.KindOrchestrator:
-		return workspaceOrchestratorPrompt(repos), nil
+		return workspaceOrchestratorPrompt(repos, workspaceFolder), nil
 	case domain.KindWorker:
-		return workspaceWorkerPrompt(repos), nil
+		return workspaceWorkerPrompt(repos, workspaceFolder), nil
 	default:
 		return "", nil
 	}
 }
 
-func (m *Manager) activeOrchestratorSessionID(ctx context.Context, project domain.ProjectID) (domain.SessionID, bool, error) {
+func (m *Manager) activeOrchestratorSessionID(ctx context.Context, project domain.ProjectID, workspaceFolder string) (domain.SessionID, bool, error) {
 	recs, err := m.store.ListSessions(ctx, project)
 	if err != nil {
 		return "", false, fmt.Errorf("list sessions for %s: %w", project, err)
 	}
+	var fallback domain.SessionID
 	for _, rec := range recs {
-		if rec.Kind == domain.KindOrchestrator && !rec.IsTerminated {
+		if rec.Kind != domain.KindOrchestrator || rec.IsTerminated {
+			continue
+		}
+		if rec.Metadata.WorkspaceFolder == workspaceFolder {
 			return rec.ID, true, nil
 		}
+		if workspaceFolder != "" && rec.Metadata.WorkspaceFolder == "" && fallback == "" {
+			fallback = rec.ID
+		}
+	}
+	if fallback != "" {
+		return fallback, true, nil
 	}
 	return "", false, nil
 }
@@ -6634,7 +6670,17 @@ func (m *Manager) cleanupSystemPromptDir(id domain.SessionID) {
 	}
 }
 
-func workspaceOrchestratorPrompt(repos []domain.WorkspaceRepoRecord) string {
+func workspaceOrchestratorPrompt(repos []domain.WorkspaceRepoRecord, workspaceFolder string) string {
+	if workspaceFolder != "" {
+		return fmt.Sprintf(`## Workspace project
+
+This project is a multi-repository workspace, and this orchestrator is scoped to folder %q. Sessions start at the workspace root. The root repository is %s at path `+"`.`"+`; child repositories are nested below it.
+
+Repositories:
+%s
+
+Coordinate work for folder %q by default. When spawning workers with `+"`ao spawn`"+`, pass `+"`--folder %s`"+` (or another repository path only when cross-folder coordination is explicitly needed) and name the repository path they should work in; track deliverables, pull requests, and checks by repository.`, workspaceFolder, domain.RootWorkspaceRepoName, workspaceRepoList(repos), workspaceFolder, workspaceFolder)
+	}
 	return fmt.Sprintf(`## Workspace project
 
 This project is a multi-repository workspace. Sessions start at the workspace root. The root repository is %s at path `+"`.`"+`; child repositories are nested below it.
@@ -6642,11 +6688,11 @@ This project is a multi-repository workspace. Sessions start at the workspace ro
 Repositories:
 %s
 
-When spawning workers, name the repository path or paths they should work in. Work can span multiple repositories, so track deliverables, pull requests, and checks by repository.`, domain.RootWorkspaceRepoName, workspaceRepoList(repos))
+When spawning workers, name the repository path or paths they should work in and pass `+"`--folder <relative-path>`"+` to `+"`ao spawn`"+` whenever a task belongs to a specific child folder so the worker appears under that folder. Work can span multiple repositories, so track deliverables, pull requests, and checks by repository.`, domain.RootWorkspaceRepoName, workspaceRepoList(repos))
 }
 
-func workspaceWorkerPrompt(repos []domain.WorkspaceRepoRecord) string {
-	return fmt.Sprintf(`## Workspace project
+func workspaceWorkerPrompt(repos []domain.WorkspaceRepoRecord, workspaceFolder string) string {
+	base := fmt.Sprintf(`## Workspace project
 
 This session is a multi-repository workspace. You start at the workspace root. The root repository is %s at path `+"`.`"+`; child repositories are nested below it.
 
@@ -6654,6 +6700,10 @@ Repositories:
 %s
 
 Before editing, identify which repository owns the task and keep changes scoped to the requested repository or repositories. If you touch root files, call that out explicitly because root changes are separate from child-repository changes.`, domain.RootWorkspaceRepoName, workspaceRepoList(repos))
+	if workspaceFolder == "" {
+		return base
+	}
+	return base + fmt.Sprintf("\n\nThis session is scoped to workspace folder `%s`. Keep changes inside that folder unless the task explicitly asks otherwise.", workspaceFolder)
 }
 
 func workspaceRepoList(repos []domain.WorkspaceRepoRecord) string {

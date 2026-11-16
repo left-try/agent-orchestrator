@@ -31,6 +31,7 @@ export function useProjectOrchestratorAction({
 	projectId,
 	project,
 	orchestrator,
+	folder,
 	source,
 	sessionId,
 	hostId,
@@ -38,6 +39,7 @@ export function useProjectOrchestratorAction({
 	projectId?: string;
 	project?: WorkspaceScope["project"];
 	orchestrator?: WorkspaceSession;
+	folder?: string;
 	source: OrchestratorSpawnSource;
 	sessionId?: string;
 	hostId?: string;
@@ -47,8 +49,10 @@ export function useProjectOrchestratorAction({
 	const queryClient = useQueryClient();
 	const connectedHosts = useConnectedHosts();
 	const hostConnected = !hostId || connectedHosts.includes(hostId);
-	const mutationKey = hostId ? ["project-orchestrator-open", hostId, projectId] : ["project-orchestrator-open", projectId];
-	const routeKey = `${hostId ?? "local"}/${projectId ?? ""}/${sessionId ?? ""}`;
+	const mutationKey = hostId
+		? ["project-orchestrator-open", hostId, projectId, folder ?? ""]
+		: ["project-orchestrator-open", projectId, folder ?? ""];
+	const routeKey = `${hostId ?? "local"}/${projectId ?? ""}/${folder ?? ""}/${sessionId ?? ""}`;
 	const activeRoute = useRef<string | null>(routeKey);
 	activeRoute.current = routeKey;
 	useEffect(() => {
@@ -103,7 +107,7 @@ export function useProjectOrchestratorAction({
 				? (await earlyResume, resumableOrchestrator.id)
 				: project?.kind === CLOUD_PROJECT_KIND
 					? await spawnCloudOrchestrator(queryClient, projectId)
-					: await spawnOrchestrator(projectId, source, false, mode);
+					: await spawnOrchestrator(projectId, source, false, mode, undefined, undefined, folder || undefined);
 			await queryClient.invalidateQueries({
 				queryKey: project?.kind === CLOUD_PROJECT_KIND ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId),
 			});
@@ -147,7 +151,9 @@ export function useProjectOrchestratorAction({
 		}
 	};
 	const openNewTask = () => {
-		if (projectId && hostConnected && !isProjectRestarting && !isProvisioning) useUiStore.getState().requestNewTask(projectId, hostId);
+		if (projectId && hostConnected && !isProjectRestarting && !isProvisioning) {
+			useUiStore.getState().requestNewTask(projectId, hostId, folder ? { folder } : undefined);
+		}
 	};
 	return { projectId, hostId, orchestrator, isSpawning, isProjectRestarting, isProvisioning, spawnError,
 		canCreateAsTui: isChatPreflightError(error), openOrchestrator, openNewTask };

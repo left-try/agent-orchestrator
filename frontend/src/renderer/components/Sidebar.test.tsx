@@ -4936,4 +4936,108 @@ describe("Memoized Sidebar with unchanged props", () => {
 			expect(pinnedRow()).toBeInTheDocument();
 		});
 	});
+
+	describe("multi-folder workspace sidebar", () => {
+		it("renders folders directly inside the workspace with nested chats, no folder filter dropdown, and no folder markers on chat names", async () => {
+			const rootTask: WorkspaceSession = {
+				...session,
+				id: "root-task",
+				title: "Root workspace task",
+			};
+			const apiTask: WorkspaceSession = {
+				...session,
+				id: "api-task",
+				title: "Fix API endpoints",
+				workspaceFolder: "services/api",
+			};
+			const webTask: WorkspaceSession = {
+				...session,
+				id: "web-task",
+				title: "Fix web dashboard",
+				workspaceFolder: "apps/web",
+			};
+			const multiFolderWorkspace: WorkspaceSummary = {
+				id: "mf-workspace",
+				name: "Mono Repo",
+				path: "/repo/mono",
+				kind: "workspace",
+				workspaceRepos: [
+					{ name: "api", relativePath: "services/api", repo: "acme/api" },
+					{ name: "web", relativePath: "apps/web", repo: "acme/web" },
+				],
+				sessions: [rootTask, apiTask, webTask],
+			};
+
+			renderSidebar({ workspaces: [multiFolderWorkspace] });
+
+			// Root session rendered at project level
+			expect(screen.getByText("Root workspace task")).toBeInTheDocument();
+
+			// No folder filter dropdown
+			expect(screen.queryByLabelText("Folder")).not.toBeInTheDocument();
+
+			// Folders rendered directly inside workspace
+			const apiBranch = screen.getByRole("button", { name: "api · Mono Repo" });
+			const webBranch = screen.getByRole("button", { name: "web · Mono Repo" });
+			expect(apiBranch).toBeInTheDocument();
+			expect(webBranch).toBeInTheDocument();
+
+			// Nested sessions visible inside their folders
+			expect(screen.getByText("Fix API endpoints")).toBeInTheDocument();
+			expect(screen.getByText("Fix web dashboard")).toBeInTheDocument();
+
+			// No folder markers rendered on chat rows
+			expect(document.querySelector("[data-workspace-folder]")).not.toBeInTheDocument();
+
+			// Clicking folder row navigates to /projects/$projectId?folder=<relativePath>
+			fireEvent.click(apiBranch);
+			expect(navigateMock).toHaveBeenCalledWith({
+				to: "/projects/$projectId",
+				params: { projectId: "mf-workspace" },
+				search: { folder: "services/api" },
+			});
+		});
+
+		it("folder actions trigger folder new task and folder orchestrator spawn", async () => {
+			const multiFolderWorkspace: WorkspaceSummary = {
+				id: "mf-workspace",
+				name: "Mono Repo",
+				path: "/repo/mono",
+				kind: "workspace",
+				workspaceRepos: [
+					{ name: "api", relativePath: "services/api", repo: "acme/api" },
+				],
+				sessions: [],
+			};
+
+			renderSidebar({ workspaces: [multiFolderWorkspace] });
+
+			// Find folder branch container
+			const branch = document.querySelector('[data-workspace-folder-branch="services/api"]');
+			expect(branch).toBeInTheDocument();
+
+			// Click folder + button -> requests new task with folder option
+			const newTaskBtn = within(branch as HTMLElement).getByRole("button", { name: "New task" });
+			fireEvent.click(newTaskBtn);
+			expect(useUiStore.getState().newTaskRequest?.folder).toBe("services/api");
+			expect(useUiStore.getState().newTaskRequest?.projectId).toBe("mf-workspace");
+
+			// Click folder orchestrator button -> spawns folder orchestrator
+			spawnMock.mockResolvedValueOnce("orch-api-1");
+			const spawnOrchBtn = within(branch as HTMLElement).getByRole("button", { name: "spawn orchestrator (api)" });
+			fireEvent.click(spawnOrchBtn);
+			await waitFor(() => {
+				expect(spawnMock).toHaveBeenCalledWith(
+					"mf-workspace",
+					"sidebar",
+					false,
+					undefined,
+					undefined,
+					undefined,
+					"services/api",
+				);
+			});
+		});
+	});
 });
+

@@ -988,16 +988,17 @@ func (q *Queries) IncrementUsageMessageSummary(ctx context.Context, arg Incremen
 const insertConversation = `-- name: InsertConversation :exec
 
 INSERT INTO conversations (
-    id, scope, project_id, session_id, current_session_id, latest_sequence,
+    id, scope, project_id, workspace_folder, session_id, current_session_id, latest_sequence,
     active_branch_id, created_at, updated_at
 )
-VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
 `
 
 type InsertConversationParams struct {
 	ID               string
 	Scope            domain.ConversationScope
 	ProjectID        *domain.ProjectID
+	WorkspaceFolder  string
 	SessionID        *domain.SessionID
 	CurrentSessionID *domain.SessionID
 	ActiveBranchID   string
@@ -1016,6 +1017,7 @@ func (q *Queries) InsertConversation(ctx context.Context, arg InsertConversation
 		arg.ID,
 		arg.Scope,
 		arg.ProjectID,
+		arg.WorkspaceFolder,
 		arg.SessionID,
 		arg.CurrentSessionID,
 		arg.ActiveBranchID,
@@ -1647,6 +1649,59 @@ func (q *Queries) ListInterruptedSessions(ctx context.Context, jsonEach interfac
 			return nil, err
 		}
 		items = append(items, session_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSessionTurnDiffs = `-- name: ListSessionTurnDiffs :many
+WITH wanted AS (
+    SELECT CAST(j.value AS TEXT) AS session_id
+    FROM json_each(?) AS j
+)
+SELECT w.session_id, t.diff_json
+FROM wanted AS w
+JOIN conversation_turns AS t
+  ON (
+      t.handled_by_session_id = w.session_id
+      OR (
+          t.handled_by_session_id IS NULL
+          AND EXISTS (
+              SELECT 1 FROM conversations AS c
+              WHERE c.id = t.conversation_id
+                AND c.scope = 'session'
+                AND (c.session_id = w.session_id OR c.current_session_id = w.session_id)
+          )
+      )
+  )
+WHERE t.diff_json <> ''
+  AND t.rolled_back_at IS NULL
+ORDER BY t.rowid
+`
+
+type ListSessionTurnDiffsRow struct {
+	SessionID string
+	DiffJson  string
+}
+
+func (q *Queries) ListSessionTurnDiffs(ctx context.Context, jsonEach interface{}) ([]ListSessionTurnDiffsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionTurnDiffs, jsonEach)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSessionTurnDiffsRow{}
+	for rows.Next() {
+		var i ListSessionTurnDiffsRow
+		if err := rows.Scan(&i.SessionID, &i.DiffJson); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -2858,7 +2913,7 @@ func (q *Queries) SelectConversationBranches(ctx context.Context, conversationID
 }
 
 const selectConversationByID = `-- name: SelectConversationByID :one
-SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, auto_compact_window FROM conversations WHERE id = ? LIMIT 1
+SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, auto_compact_window, workspace_folder FROM conversations WHERE id = ? LIMIT 1
 `
 
 func (q *Queries) SelectConversationByID(ctx context.Context, id string) (Conversation, error) {
@@ -2901,12 +2956,13 @@ func (q *Queries) SelectConversationByID(ctx context.Context, id string) (Conver
 		&i.ActiveBranchID,
 		&i.OpencodeMode,
 		&i.AutoCompactWindow,
+		&i.WorkspaceFolder,
 	)
 	return i, err
 }
 
 const selectConversationByReview = `-- name: SelectConversationByReview :one
-SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, auto_compact_window FROM conversations WHERE current_review_id = ? LIMIT 1
+SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, auto_compact_window, workspace_folder FROM conversations WHERE current_review_id = ? LIMIT 1
 `
 
 func (q *Queries) SelectConversationByReview(ctx context.Context, currentReviewID sql.NullString) (Conversation, error) {
@@ -2949,12 +3005,13 @@ func (q *Queries) SelectConversationByReview(ctx context.Context, currentReviewI
 		&i.ActiveBranchID,
 		&i.OpencodeMode,
 		&i.AutoCompactWindow,
+		&i.WorkspaceFolder,
 	)
 	return i, err
 }
 
 const selectConversationBySession = `-- name: SelectConversationBySession :one
-SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, auto_compact_window FROM conversations WHERE current_session_id = ?
+SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, auto_compact_window, workspace_folder FROM conversations WHERE current_session_id = ?
 ORDER BY scope = 'project' DESC, created_at DESC, id DESC
 LIMIT 1
 `
@@ -3003,6 +3060,7 @@ func (q *Queries) SelectConversationBySession(ctx context.Context, currentSessio
 		&i.ActiveBranchID,
 		&i.OpencodeMode,
 		&i.AutoCompactWindow,
+		&i.WorkspaceFolder,
 	)
 	return i, err
 }
@@ -4503,11 +4561,16 @@ func (q *Queries) SelectNextQueuedConversationTurn(ctx context.Context, conversa
 }
 
 const selectProjectConversation = `-- name: SelectProjectConversation :one
-SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, auto_compact_window FROM conversations WHERE project_id = ? AND scope = 'project' LIMIT 1
+SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, auto_compact_window, workspace_folder FROM conversations WHERE project_id = ? AND scope = 'project' AND workspace_folder = ? LIMIT 1
 `
 
-func (q *Queries) SelectProjectConversation(ctx context.Context, projectID *domain.ProjectID) (Conversation, error) {
-	row := q.db.QueryRowContext(ctx, selectProjectConversation, projectID)
+type SelectProjectConversationParams struct {
+	ProjectID       *domain.ProjectID
+	WorkspaceFolder string
+}
+
+func (q *Queries) SelectProjectConversation(ctx context.Context, arg SelectProjectConversationParams) (Conversation, error) {
+	row := q.db.QueryRowContext(ctx, selectProjectConversation, arg.ProjectID, arg.WorkspaceFolder)
 	var i Conversation
 	err := row.Scan(
 		&i.ID,
@@ -4546,6 +4609,7 @@ func (q *Queries) SelectProjectConversation(ctx context.Context, projectID *doma
 		&i.ActiveBranchID,
 		&i.OpencodeMode,
 		&i.AutoCompactWindow,
+		&i.WorkspaceFolder,
 	)
 	return i, err
 }
