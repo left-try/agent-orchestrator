@@ -3273,10 +3273,12 @@ func agyApprovalTier(value string) (domain.PermissionMode, string, bool) {
 	switch value {
 	case "default":
 		return domain.PermissionModeDefault, "Use agent permissions", true
-	case "auto_edit":
+	case "auto_edit", "accept-edits":
 		return domain.PermissionModeAcceptEdits, "Accept edits", true
-	case "yolo":
+	case "auto":
 		return domain.PermissionModeAuto, "Auto-approve", true
+	case "yolo":
+		return domain.PermissionModeBypassPermissions, "Bypass permissions", true
 	default:
 		return "", "", false
 	}

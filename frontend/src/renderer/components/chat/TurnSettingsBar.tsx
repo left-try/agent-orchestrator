@@ -68,7 +68,7 @@ const APPROVAL_ORDER: ApprovalMode[] = [
 const AGY_APPROVAL_COPY: Record<ApprovalMode, { label: string; description?: string }> = {
 	...APPROVAL_COPY,
 	default: { label: "Ask for approval" },
-	"bypass-permissions": { label: "Auto-approve" },
+	"bypass-permissions": { label: "Bypass permissions" },
 };
 
 // Hermes' default mode governs only its file-edit tool; ordinary shell commands

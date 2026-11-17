@@ -1944,7 +1944,8 @@ it("presents Antigravity model variants as Codex-style model and effort choices 
 		{ id: "mode", name: "Session Mode", category: "mode", type: "select", currentValue: "auto_edit", choices: [
 			{ value: "default", name: "Use agent permissions", permissionMode: "default" },
 			{ value: "auto_edit", name: "Accept edits", permissionMode: "accept-edits" },
-			{ value: "yolo", name: "Auto-approve", permissionMode: "auto" },
+			{ value: "auto", name: "Auto", permissionMode: "auto" },
+			{ value: "yolo", name: "Bypass permissions", permissionMode: "bypass-permissions" },
 			{ value: "agent", name: "Agent Mode" },
 		] },
 	];
@@ -1968,6 +1969,9 @@ it("presents Antigravity model variants as Codex-style model and effort choices 
 	expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "default" });
 	await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
 	await user.click(screen.getByRole("menuitemradio", { name: "Auto-approve" }));
+	expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "auto" });
+	await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+	await user.click(screen.getByRole("menuitemradio", { name: "Bypass permissions" }));
 	expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "yolo" });
 	expect(options[0].choices).toHaveLength(4);
 });
