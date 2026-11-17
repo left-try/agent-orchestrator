@@ -73,6 +73,7 @@ export function AgentModelCombobox({
 	onChange,
 	onCustom,
 	onUseDefault,
+	defaultChoiceLabel,
 	emptyLabel,
 	footer,
 	modelHint,
@@ -105,6 +106,8 @@ export function AgentModelCombobox({
 	onCustom?: (value: string) => void;
 	/** Offers the agent's native default as a choice, above the listed models. */
 	onUseDefault?: () => void;
+	/** Re-labels the no-model choice when it has provider-specific meaning. */
+	defaultChoiceLabel?: string;
 	/** Shown when the agent does not report a concrete model. */
 	emptyLabel?: string;
 	/** A note under the models, such as where they come from. */
@@ -426,7 +429,7 @@ export function AgentModelCombobox({
 							<>
 								<DropdownMenuItem onSelect={onUseDefault} className={modelItemClass(explicitModel === "")}>
 									<span className="truncate text-settings-label">
-										{t("settings.models.useConfiguredDefault")}
+										{defaultChoiceLabel ?? t("settings.models.useConfiguredDefault")}
 									</span>
 								</DropdownMenuItem>
 								{visibleModels.length > 0 && <DropdownMenuSeparator />}

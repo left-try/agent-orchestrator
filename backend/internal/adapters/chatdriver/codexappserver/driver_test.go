@@ -1219,6 +1219,24 @@ func TestApprovalSettingsMirrorTUIPosture(t *testing.T) {
 	}
 }
 
+func TestStartWithoutModelDefersToCodexConfiguredDefault(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	started := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/start" })
+	var params map[string]any
+	if err := json.Unmarshal(started.Params, &params); err != nil {
+		t.Fatalf("decode thread/start params: %v: %s", err, started.Params)
+	}
+	if _, specified := params["model"]; specified {
+		t.Fatalf("thread/start model = %#v, want omitted so Codex uses its configured default", params["model"])
+	}
+}
+
 func TestReadOnlyTurnCannotOverrideSandbox(t *testing.T) {
 	params := map[string]any{}
 	applyTurnSettings(params, ports.ChatTurnSettings{Approval: ports.PermissionModeAuto}, true, false)

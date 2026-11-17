@@ -2071,6 +2071,36 @@ describe("TaskComposer", () => {
 		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5 Codex");
 	});
 
+	it("lets a local Codex task defer model choice to Codex", async () => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return { data: { agent: "codex", selectionMode: "text", models: [{ id: "gpt-catalog-default", label: "GPT Catalog Default", isDefault: true }], allowCustom: true } };
+			}
+			return { data: { status: "ok", project: { agent: "codex", config: {} } } };
+		});
+		h.post.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/projects/{id}/tasks/prepare") return { data: { taskPreparation: "" } };
+			if (path === "/api/v1/orchestrators/delegate") return { data: { workerId: "session-auto" } };
+			return { data: {} };
+		});
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await waitForTaskReady();
+
+		const modelPicker = screen.getByRole("button", { name: "Model" });
+		await userEvent.click(modelPicker);
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Auto" }));
+		expect(modelPicker).toHaveTextContent("Auto");
+
+		await userEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith(
+			"/api/v1/orchestrators/delegate",
+			expect.objectContaining({ body: expect.objectContaining({ projectId: "proj-1" }) }),
+		));
+		const body = h.post.mock.calls.find(([path]) => path === "/api/v1/orchestrators/delegate")?.[1]?.body;
+		expect(body).not.toHaveProperty("model");
+	});
+
 	it.each([
 		{ name: "the newest Opus when nothing was run", agent: "claude-code", lastUsed: {}, expected: "Opus 5.5" },
 		{ name: "the most recently run model, ahead of Opus", agent: "claude-code", lastUsed: { "claude-fable-5-1": "2026-10-01T12:00:00Z", "claude-sonnet-5-5": "2026-10-05T12:00:00Z" }, expected: "Sonnet 5.5" },

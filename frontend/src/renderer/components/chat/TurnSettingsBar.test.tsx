@@ -936,7 +936,8 @@ describe("ACP session config options", () => {
 		expect(agentPicker.current?.models.find((model) => model.id === "opus")?.hint).toBe("Same as orchestrator");
 	});
 
-	it("keeps Cloud model and effort choices without a per-turn permission picker", () => {		render(
+	it("offers Codex's configured default without a per-turn permission picker", () => {
+		render(
 			<TurnSettingsBar
 				harness="codex"
 				models={[{ id: "codex-test", displayName: "Codex Test", default: true, efforts: ["low", "high"] }]}
@@ -945,7 +946,7 @@ describe("ACP session config options", () => {
 				showApprovalMode={false}
 			/>,
 		);
-		expect(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" })).toHaveTextContent("Codex Test");
+		expect(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" })).toHaveTextContent("Auto");
 		expect(screen.queryByRole("button", { name: "Approval policy for the next turn" })).not.toBeInTheDocument();
 	});
 
@@ -988,6 +989,25 @@ describe("ACP session config options", () => {
 		expect(screen.getByRole("button", { name: "Approval policy for the next turn" })).toHaveTextContent(
 			"Full access",
 		);
+	});
+
+	it("lets Codex use its thread default from the per-turn model menu", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(
+			<TurnSettingsBar
+				harness="codex"
+				models={[{ id: "codex-test", displayName: "Codex Test", default: true, efforts: ["low", "high"] }]}
+				settings={{ model: "other-model", reasoningEffort: "high" }}
+				onChange={onChange}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" }));
+		await user.click(screen.getByRole("menuitem", { name: "Model" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "Auto" }));
+
+		expect(onChange).toHaveBeenCalledWith({ model: undefined, reasoningEffort: undefined });
 	});
 
 	it("labels bypass permission policy plainly", () => {

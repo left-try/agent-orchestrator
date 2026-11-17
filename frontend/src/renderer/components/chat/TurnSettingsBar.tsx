@@ -224,8 +224,9 @@ export function TurnSettingsBar({
 	const fallback = settings.model ? undefined : displayModels.find((model) => model.default);
 	// A catalog miss must not relabel an explicit choice or borrow another model's
 	// effort settings. Custom or newly available models may not be listed yet.
-	const chosenLabel =
-		selected?.displayName ?? settings.model ?? fallback?.displayName ?? unsetModelLabel ?? "Choose a model";
+	const chosenLabel = harness === "codex" && !settings.model
+		? t("settings.models.autoRouteLabel")
+		: selected?.displayName ?? settings.model ?? fallback?.displayName ?? unsetModelLabel ?? "Choose a model";
 	const rerouted = reroute
 		? displayModels.find((model) => model.id === reroute.toModel)?.displayName ?? reroute.toModel
 		: undefined;
@@ -827,20 +828,34 @@ function ModelEffortPicker({
 					    events do not reliably reach an outer overflow on nested submenus. */}
 					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
 						<ModelMenuChoices models={catalog} selectedId={settings.model}>
-							{(matches, searchActiveID, optionID) => matches.map((model) => (
-								<OptionMenuItem
-									key={model.id}
-									id={optionID?.(model.id)}
-									active={model.id === settings.model}
-									searchActive={model.id === searchActiveID}
-									radio
-									disabled={Boolean(model.unavailableReason)}
-									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
-									className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
-								>
-									<UnavailableLabel label={model.displayName} reason={model.unavailableReason} />
-								</OptionMenuItem>
-							))}
+							{(matches, searchActiveID, optionID, query) => <>
+								{harness === "codex" && !query ? (
+									<OptionMenuItem
+										key="codex-configured-default"
+										active={!settings.model}
+										radio
+										title="Use Codex's configured default model for this thread"
+										onSelect={() => onChange({ ...settings, model: undefined, reasoningEffort: undefined })}
+										className={cn("text-xs", !settings.model ? "text-foreground" : "text-muted-foreground")}
+									>
+										{t("settings.models.autoRouteLabel")}
+									</OptionMenuItem>
+								) : null}
+								{matches.map((model) => (
+									<OptionMenuItem
+										key={model.id}
+										id={optionID?.(model.id)}
+										active={model.id === settings.model}
+										searchActive={model.id === searchActiveID}
+										radio
+										disabled={Boolean(model.unavailableReason)}
+										onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
+										className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
+									>
+										<UnavailableLabel label={model.displayName} reason={model.unavailableReason} />
+									</OptionMenuItem>
+								))}
+							</>}
 						</ModelMenuChoices>
 					</OptionMenuSubContent>
 				</OptionMenuSub>
