@@ -97,9 +97,9 @@ export function getSessionStatusDotView(
 	if (sessionNeedsYou(session)) return dot("bg-status-needs-you");
 
 	const column = toKanbanColumn(session.kanbanColumn, sectionStatus);
-	// The card paints a merged PR purple inside the Ready lane; the dot follows.
+	// The card paints a merged PR purple inside Ready/Done; the dot follows.
 	const merged = session.displayStatus ? session.displayStatus === "Merged" : sectionStatus === "merged";
-	if (column === "ready" && merged) {
+	if ((column === "ready" || column === "done") && merged) {
 		return { className: getSessionStatusView("merged", t).dotClassName, breathe: false };
 	}
 	return dot(getKanbanColumnView(column, t).dotClassName);
@@ -153,6 +153,9 @@ export function getSessionRowMarker(session: {
 			return (display ? display === "Mergeable" || display === "Approved" : sectionStatus === "mergeable" || sectionStatus === "approved")
 				? "ready"
 				: null;
+		case "done":
+			if (display ? display === "Merged" : sectionStatus === "merged") return "merged";
+			return null;
 		default:
 			return null;
 	}

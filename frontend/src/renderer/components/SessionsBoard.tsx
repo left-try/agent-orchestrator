@@ -1,5 +1,5 @@
 import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -9,7 +9,7 @@ import {
 	largestSession,
 	type ChipTone,
 } from "@aoagents/product-ui";
-import { AlertTriangle, Archive, RotateCw, WifiOff } from "@/components/app-icons";
+import { AlertTriangle, Archive, Plus, RotateCw, SlidersHorizontal, WifiOff } from "@/components/app-icons";
 import {
 	CLOUD_PROJECT_KIND,
 	isScratchpadWorkspace,
@@ -22,11 +22,7 @@ import {
 	hasConfiguredOrchestratorAgent,
 } from "../types/workspace";
 import { isArchivedSession } from "../lib/standalone-archive";
-import {
-	boardKanbanColumnOrder,
-	getKanbanColumnView,
-	type KanbanColumnView,
-} from "../lib/session-presentation";
+import { getKanbanColumnView, type KanbanColumnView } from "../lib/session-presentation";
 import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { useTerminateSession } from "../hooks/useTerminateSession";
@@ -35,8 +31,12 @@ import { useSessionParticipants } from "../hooks/useSessionParticipants";
 import { useCloudProjectsQuery, useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { FREESTYLE_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
+import { defaultKanbanSettings, useSettings } from "../hooks/useSettings";
+import { useBacklogItems, type BacklogItem } from "../hooks/useBacklog";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
 import { ProjectImportOffer } from "./ProjectImportOffer";
+import { KanbanCustomizeDialog } from "./KanbanCustomizeDialog";
+import { AddBacklogItemDialog, BacklogItemDetailDialog } from "./BacklogDialogs";
 import { noDragStyle, PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { formatTimeCompact } from "../lib/format-time";
@@ -86,10 +86,18 @@ export function SessionsBoard({ projectId, hostId, folder }: SessionsBoardProps)
 	const hostLabel = hostId ? labelForHost(hostId) ?? savedHost?.label ?? hostId : undefined;
 	const activeFolder = folder?.trim() || undefined;
 	const scopeKey = refKey({ host: hostId ?? LOCAL_HOST, id: projectId ?? "all", folder: activeFolder ?? "" });
-	// Lanes follow the daemon's delivery order: building -> validating ->
-	// in review -> ready. The middle two are one review-feedback loop, split by
-	// whose turn it is.
-	const columns: KanbanColumnView[] = boardKanbanColumnOrder.map((column) => getKanbanColumnView(column, t));
+	const { settings } = useSettings(hostId, !hostId);
+	const kanbanSettings = settings?.kanban ?? defaultKanbanSettings();
+	const columns: KanbanColumnView[] = useMemo(() => {
+		return kanbanSettings.columns
+			.filter((pref) => pref.enabled)
+			.map((pref) => {
+				const base = getKanbanColumnView(pref.id, t);
+				const customLabel = pref.label?.trim();
+				return customLabel ? { ...base, label: customLabel } : base;
+			});
+	}, [kanbanSettings.columns, t]);
+	const backlogEnabled = !hostId && kanbanSettings.columns.some((col) => col.id === "backlog" && col.enabled);
 	const localWorkspaceQuery = useWorkspaceQuery();
 	const remoteProjectQuery = useRemoteProjectQuery(hostId ?? "", projectId ?? "");
 	const all = localWorkspaceQuery.data ?? [];
@@ -101,6 +109,15 @@ export function SessionsBoard({ projectId, hostId, folder }: SessionsBoardProps)
 	const folderRepo = activeFolder
 		? folderRepos.find((repo) => repo.relativePath === activeFolder || repo.name === activeFolder)
 		: undefined;
+	const backlogItems = useBacklogItems(projectId, backlogEnabled && workspaces.length > 0).items;
+	const projectNamesById = useMemo(
+		() => new Map(workspaces.map((candidate) => [candidate.id, candidate.name])),
+		[workspaces],
+	);
+	const [customizeOpen, setCustomizeOpen] = useState(false);
+	const [addBacklogOpen, setAddBacklogOpen] = useState(false);
+	const [selectedBacklogItem, setSelectedBacklogItem] = useState<BacklogItem | null>(null);
+	const [backlogDetailOpen, setBacklogDetailOpen] = useState(false);
 	// A Freestyle cloud project's orchestrator starts in place (see
 	// OrchestratorStartingChat); its session does not exist yet, so the
 	// project's provider decides, as the control plane's does.
@@ -185,7 +202,12 @@ export function SessionsBoard({ projectId, hostId, folder }: SessionsBoardProps)
 		session.status === "no_signal" || session.displayStatus === "No signal"
 			? { ...session, kanbanColumn: "building" as const }
 			: session,
-	);
+	).map((session) => {
+		if (!kanbanSettings.moveMergedToDone && session.kanbanColumn === "done") {
+			return { ...session, kanbanColumn: "ready" as const };
+		}
+		return session;
+	});
 	const boardLabels = sessionsBoardLabels(t);
 	const presentation = useBoardPresentation({
 		projectId,
@@ -193,6 +215,7 @@ export function SessionsBoard({ projectId, hostId, folder }: SessionsBoardProps)
 		isError: localWorkspaceQuery.isError,
 		hasProjects: workspaces.length > 0,
 		hasWorkerSessions: liveSessions.length > 0,
+		hasBacklogContent: backlogEnabled,
 	});
 	const showStartup = !hostId && presentation.showStartup;
 	const showWelcome = !hostId && presentation.showWelcome;
@@ -205,6 +228,19 @@ export function SessionsBoard({ projectId, hostId, folder }: SessionsBoardProps)
 	const diagnostics = useDiagnosticsEnabled();
 	// The light leads the board's actions, before the Task button, not in the archive bar.
 	const memoryLight = diagnostics && !hostId ? <AppMemoryIndicator /> : null;
+	const customizeButton = !hostId && workspaces.length > 0 ? (
+		<Button
+			aria-label={t("kanban.customize")}
+			data-testid="board-customize-button"
+			onClick={() => setCustomizeOpen(true)}
+			size="sm"
+			type="button"
+			variant="quiet"
+		>
+			<SlidersHorizontal className="size-icon-md" aria-hidden="true" />
+			<span data-compact-label="">{t("kanban.customize")}</span>
+		</Button>
+	) : null;
 	// Per-session readings feed each card's resource chip. Chips are grey
 	// unless the machine is tight and the card is part of the fix (idle, or
 	// the single largest).
@@ -271,11 +307,17 @@ export function SessionsBoard({ projectId, hostId, folder }: SessionsBoardProps)
 		<>
 			<ProjectTerminationFeedback projectId={projectId} hostId={hostId} />
 			{memoryLight}
+			{customizeButton}
 			{guest ? null : <ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />}
 		</>
 	) : hostOffline ? (
 		<HostOfflineStatus host={savedHost} label={hostLabel ?? ""} updatedAt={workspace ? remoteProjectQuery.dataUpdatedAt : undefined} />
-	) : memoryLight ?? undefined;
+	) : memoryLight || customizeButton ? (
+		<>
+			{memoryLight}
+			{customizeButton}
+		</>
+	) : undefined;
 
 	if (projectId && (isProvisioning || projectActions.isSpawning || autoStartPending)) {
 		return <OrchestratorStartingChat
@@ -358,11 +400,83 @@ export function SessionsBoard({ projectId, hostId, folder }: SessionsBoardProps)
 						actions={guest ? null : <ProjectBoardActions actions={projectActions} placement="empty" />}
 						offer={projectId && !hostId && !activeFolder ? <ProjectImportOffer className="mt-8 w-full text-left" projectId={projectId} /> : null}
 					/>
+				) : columns.length === 0 ? (
+					<div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-4 text-center">
+						<p className="text-sm text-muted-foreground">{t("kanban.emptyAllColumns")}</p>
+						{!hostId ? (
+							<Button onClick={() => setCustomizeOpen(true)} size="sm" type="button" variant="secondary">
+								{t("kanban.customize")}
+							</Button>
+						) : null}
+					</div>
 				) : (
 					<SessionsBoardGridView
 						columns={columns}
+						columnCountOverride={(col) => (col === "backlog" ? backlogItems.length : undefined)}
+						columnHeaderAction={(col) =>
+							col.column === "backlog" && !guest && !hostId ? (
+								<Button
+									aria-label={t("backlog.addAria")}
+									className="h-6 gap-1 px-1.5 text-2xs"
+									data-testid="backlog-add-button"
+									onClick={() => setAddBacklogOpen(true)}
+									size="none"
+									type="button"
+									variant="quiet"
+								>
+									<Plus className="size-3" aria-hidden="true" />
+									{t("backlog.add")}
+								</Button>
+							) : null
+						}
 						key={scopeKey}
 						labels={boardLabels}
+						renderColumnContent={(col) => {
+							if (col.column !== "backlog") return undefined;
+							if (backlogItems.length === 0) {
+								return (
+									<div
+										className="rounded-lg border border-dashed border-border px-3 py-4 text-xs leading-relaxed text-muted-foreground"
+										data-testid="backlog-empty-hint"
+									>
+										{t("backlog.emptyColumn")}
+									</div>
+								);
+							}
+							return backlogItems.map((item) => (
+								<button
+									key={item.id}
+									className="group flex w-full cursor-pointer flex-col gap-1.5 rounded-lg border border-border bg-surface px-3.5 py-2.5 text-left transition-[background-color,box-shadow] duration-[120ms] ease-out hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+									data-backlog-id={item.id}
+									data-testid="backlog-item-card"
+									onClick={() => {
+										setSelectedBacklogItem(item);
+										setBacklogDetailOpen(true);
+									}}
+									type="button"
+								>
+									<div className="flex items-start justify-between gap-2">
+										<span className="line-clamp-2 text-sm-md font-semibold leading-tight tracking-tight text-foreground">
+											{item.title}
+										</span>
+										<span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-2xs font-medium text-muted-foreground">
+											{item.status === "implemented" ? t("backlog.statusImplemented") : t("backlog.statusOpen")}
+										</span>
+									</div>
+									{item.summary ? (
+										<p className="line-clamp-3 text-xs leading-relaxed text-muted-foreground">
+											{item.summary}
+										</p>
+									) : null}
+									<div className="flex items-center justify-between gap-2 text-2xs text-muted-foreground/80">
+										<span className="truncate">
+											{!projectId ? (projectNamesById.get(item.projectId) ?? item.projectId) : ""}
+										</span>
+										<span className="tabular-nums">{formatTimeCompact(item.updatedAt)}</span>
+									</div>
+								</button>
+							));
+						}}
 						renderSessionCard={(session) => (
 							<BoardSessionCardAdapter
 								participants={participantsBySession.get(session.id)}
@@ -404,6 +518,35 @@ export function SessionsBoard({ projectId, hostId, folder }: SessionsBoardProps)
 				</div>
 			) : null}
 			{showStartup ? <DaemonStartupLoader /> : null}
+			{!hostId ? (
+				<KanbanCustomizeDialog
+					hostId={hostId}
+					onOpenChange={setCustomizeOpen}
+					open={customizeOpen}
+					settings={kanbanSettings}
+				/>
+			) : null}
+			{!hostId ? (
+				<AddBacklogItemDialog
+					defaultProjectId={projectId}
+					onOpenChange={setAddBacklogOpen}
+					open={addBacklogOpen}
+					orchestratorSessionId={orchestrator?.id}
+					projects={workspaces.map((candidate) => ({ id: candidate.id, name: candidate.name }))}
+				/>
+			) : null}
+			{!hostId ? (
+				<BacklogItemDetailDialog
+					canImplement={!guest}
+					item={selectedBacklogItem}
+					onOpenChange={setBacklogDetailOpen}
+					onOpenSession={(targetProjectId, sessionId) => {
+						void navigate(sessionNavigateTarget(targetProjectId, sessionId, hostId));
+					}}
+					open={backlogDetailOpen}
+					projectName={selectedBacklogItem ? projectNamesById.get(selectedBacklogItem.projectId) : undefined}
+				/>
+			) : null}
 		</div>
 	);
 }

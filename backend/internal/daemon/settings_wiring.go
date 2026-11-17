@@ -29,6 +29,7 @@ func (s settingsStore) GetAppSettings(ctx context.Context) (settingssvc.Snapshot
 		ComputerUse:          row.ComputerUse,
 		SessionRetentionDays: row.SessionRetentionDays,
 		AccountHandoff:       row.AccountHandoff,
+		Kanban:               row.Kanban,
 		UpdatedAt:            row.UpdatedAt,
 	}, nil
 }
@@ -55,6 +56,10 @@ func (s settingsStore) SetSessionRetentionDays(ctx context.Context, days int, no
 
 func (s settingsStore) SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error {
 	return s.store.SetAccountHandoff(ctx, enabled, now)
+}
+
+func (s settingsStore) SetKanbanSettings(ctx context.Context, settings domain.KanbanSettings, now time.Time) error {
+	return s.store.SetKanbanSettings(ctx, settings, now)
 }
 
 func (s settingsStore) SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error {

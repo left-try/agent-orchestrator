@@ -1167,6 +1167,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/backlog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List backlog items across projects or filtered by project */
+        get: operations["listBacklogItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backlog/{backlogId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a backlog item */
+        get: operations["getBacklogItem"];
+        put?: never;
+        post?: never;
+        /** Delete a backlog item */
+        delete: operations["deleteBacklogItem"];
+        options?: never;
+        head?: never;
+        /** Update a backlog item */
+        patch: operations["updateBacklogItem"];
+        trace?: never;
+    };
+    "/api/v1/backlog/{backlogId}/implement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Spawn a worker session from a backlog item and mark it implemented */
+        post: operations["implementBacklogItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/browser/chrome": {
         parameters: {
             query?: never;
@@ -2126,6 +2179,24 @@ export interface paths {
         put?: never;
         /** Speculatively create the next task's worktree */
         post: operations["prepareTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{projectId}/backlog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List backlog items for a project */
+        get: operations["listProjectBacklog"];
+        put?: never;
+        /** Save an unimplemented discussion to the project backlog */
+        post: operations["createBacklogItem"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4744,6 +4815,23 @@ export interface paths {
         patch: operations["updateHarnessDefault"];
         trace?: never;
     };
+    "/api/v1/settings/kanban": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Customize Kanban board columns and merged PR routing */
+        patch: operations["updateKanbanSettings"];
+        trace?: never;
+    };
     "/api/v1/settings/session-interface": {
         parameters: {
             query?: never;
@@ -5751,6 +5839,24 @@ export interface components {
             /** Format: date-time */
             startedAt?: null | string;
         };
+        BacklogItemEnvelope: {
+            item: components["schemas"]["BacklogItemResponse"];
+        };
+        BacklogItemResponse: {
+            /** Format: date-time */
+            createdAt: string;
+            id: string;
+            orchestratorSessionId?: string;
+            projectId: string;
+            prompt?: string;
+            spawnedSessionId?: string;
+            /** @enum {string} */
+            status: "open" | "implemented";
+            summary?: string;
+            title: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
         BrowserCommandRequest: {
             action: string;
             args?: {
@@ -6470,7 +6576,7 @@ export interface components {
             isTerminated: boolean;
             issueId?: string;
             /** @enum {string} */
-            kanbanColumn: "building" | "validating" | "needs_review" | "ready" | "archive";
+            kanbanColumn: "building" | "validating" | "needs_review" | "ready" | "done" | "archive";
             kind: string;
             /** Format: date-time */
             lastEventAt: string;
@@ -6916,6 +7022,16 @@ export interface components {
             /** @enum {string} */
             useCase?: "pr_review" | "issue_triage" | "repo_digest" | "ci_triage" | "release_notes" | "security_audit" | "dependency_maintenance" | "docs_maintenance" | "other" | "unknown";
         };
+        CreateBacklogItemRequest: {
+            /** @description Optional orchestrator session id where the discussion took place. */
+            orchestratorSessionId?: string;
+            /** @description Optional implementation prompt to pass when spawning a worker; defaults to summary or title. */
+            prompt?: string;
+            /** @description Notes or context summarizing the unimplemented discussion. */
+            summary?: string;
+            /** @description Short summary title for the backlog card. */
+            title: string;
+        };
         CreateConversationSideChatRequest: {
             forceNew?: boolean;
             idempotencyKey: string;
@@ -7190,6 +7306,17 @@ export interface components {
             apiVersion: number;
             hostId: string;
         };
+        ImplementBacklogItemRequest: {
+            async?: boolean;
+            harness?: string;
+            /** @enum {string} */
+            interfaceMode?: "chat" | "tui";
+            model?: string;
+        };
+        ImplementBacklogItemResponse: {
+            item: components["schemas"]["BacklogItemResponse"];
+            sessionId: string;
+        };
         ImportReport: {
             dryRun: boolean;
             notes?: string[];
@@ -7302,6 +7429,18 @@ export interface components {
             /** @description For command cues, the normal shell terminal that received the command. */
             shellTerminal?: components["schemas"]["ShellTerminalResponse"];
         };
+        KanbanColumnPreference: {
+            enabled: boolean;
+            /** @enum {string} */
+            id: "backlog" | "building" | "validating" | "needs_review" | "ready" | "done";
+            /** @description Optional custom display label for this column; empty uses the localized default. */
+            label?: string;
+        };
+        KanbanSettings: {
+            columns: components["schemas"]["KanbanColumnPreference"][];
+            /** @description When true (default), sessions whose PRs are merged are placed in the Done column instead of Ready. */
+            moveMergedToDone: boolean;
+        };
         KillReviewResponse: {
             reviewerHandleId: string;
             reviewerHarness?: string;
@@ -7348,6 +7487,9 @@ export interface components {
         ListAutomationsResponse: {
             automations: components["schemas"]["AutomationResponse"][];
             nextCursor?: string;
+        };
+        ListBacklogResponse: {
+            items: components["schemas"]["BacklogItemResponse"][];
         };
         ListCatalogModelsResponse: {
             models: string[];
@@ -8712,6 +8854,7 @@ export interface components {
             harnessDefaults?: {
                 [key: string]: components["schemas"]["HarnessDefault"];
             };
+            kanban: components["schemas"]["KanbanSettings"];
             localEnabled: boolean;
             /** @description Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it. */
             sessionRetentionDays: number;
@@ -9227,6 +9370,13 @@ export interface components {
             /** @enum {null|string} */
             useCase?: "pr_review" | "issue_triage" | "repo_digest" | "ci_triage" | "release_notes" | "security_audit" | "dependency_maintenance" | "docs_maintenance" | "other" | "unknown" | null;
         };
+        UpdateBacklogItemRequest: {
+            prompt?: string;
+            /** @enum {string} */
+            status?: "open" | "implemented";
+            summary?: string;
+            title?: string;
+        };
         UpdateChatHibernationRequest: {
             enabled: null | boolean;
         };
@@ -9235,6 +9385,10 @@ export interface components {
         };
         UpdateHarnessDefaultRequest: {
             disabledModels: null | string[];
+        };
+        UpdateKanbanSettingsRequest: {
+            columns: components["schemas"]["KanbanColumnPreference"][];
+            moveMergedToDone: boolean;
         };
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];
@@ -13422,6 +13576,307 @@ export interface operations {
             };
         };
     };
+    listBacklogItems: {
+        parameters: {
+            query?: {
+                /** @description Optional project id filter. */
+                projectId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListBacklogResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getBacklogItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Backlog item identifier. */
+                backlogId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BacklogItemEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    deleteBacklogItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Backlog item identifier. */
+                backlogId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateBacklogItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Backlog item identifier. */
+                backlogId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateBacklogItemRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BacklogItemEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    implementBacklogItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Backlog item identifier. */
+                backlogId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ImplementBacklogItemRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImplementBacklogItemResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getBrowserChrome: {
         parameters: {
             query?: never;
@@ -16754,6 +17209,119 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listProjectBacklog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project owning the backlog items. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListBacklogResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    createBacklogItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project owning the backlog items. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateBacklogItemRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BacklogItemEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -27375,6 +27943,57 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateKanbanSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateKanbanSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

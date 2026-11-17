@@ -114,6 +114,10 @@ func TestBuildSystemPrompt_OrchestratorRequiresConfirmationAndAOOnlyDelegation(t
 		"ao://sessions/{project-id}/{session-id}/artifacts/{path}",
 		"Use stable project and session IDs",
 		"operating-system deep links",
+		"## Kanban Backlog Suggestions",
+		"ao backlog add",
+		"Only occasionally",
+		"saved to the Kanban Backlog",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("orchestrator prompt missing %q:\n%s", want, got)

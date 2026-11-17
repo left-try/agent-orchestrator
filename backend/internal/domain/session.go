@@ -724,7 +724,7 @@ type Session struct {
 	// which loop is turning it: an AO-driven one (validating) or the
 	// review-feedback loop whose next turn is a person's (needs_review). It is
 	// derived independently of Status and, like it, is never persisted.
-	KanbanColumn KanbanColumn `json:"kanbanColumn" enum:"building,validating,needs_review,ready,archive"`
+	KanbanColumn KanbanColumn `json:"kanbanColumn" enum:"building,validating,needs_review,ready,done,archive"`
 	// DisplayStatus is the short phrase to render inside that column: the most
 	// important current fact about the session at the stage it sits in. It is
 	// derived after the column, from the facts that column reads, and ships in
