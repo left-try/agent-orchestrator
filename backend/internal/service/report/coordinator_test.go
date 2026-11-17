@@ -70,6 +70,55 @@ func TestCoordinatorRoutesAtAttemptAndLeavesPendingWithoutOrchestrator(t *testin
 	}
 }
 
+func TestCoordinatorRoutesToMatchingFolderOrchestrator(t *testing.T) {
+	now := time.Date(2026, 9, 14, 11, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+
+	// Main orchestrator and folder orchestrator for services/api
+	store.sessions = []domain.SessionRecord{
+		{ID: "main-orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, Metadata: domain.SessionMetadata{WorkspaceFolder: ""}, CreatedAt: now},
+		{ID: "api-orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, Metadata: domain.SessionMetadata{WorkspaceFolder: "services/api"}, CreatedAt: now.Add(time.Second)},
+		{ID: "api-worker", ProjectID: "p", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspaceFolder: "services/api"}, CreatedAt: now.Add(2 * time.Second)},
+		{ID: "web-worker", ProjectID: "p", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspaceFolder: "apps/web"}, CreatedAt: now.Add(3 * time.Second)},
+	}
+
+	// Report from api-worker
+	apiReport := reportAt("api-rep", "api-worker", now, now, "api finished")
+	store.add(apiReport)
+
+	// Report from web-worker (no apps/web orchestrator exists -> should fallback to main-orch)
+	webReport := reportAt("web-rep", "web-worker", now, now, "web finished")
+	store.add(webReport)
+
+	delivery := &coordinatorDelivery{}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, NewToken: func() string { return "claim" }})
+
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(delivery.submissions) != 2 {
+		t.Fatalf("len(submissions) = %d, want 2: %#v", len(delivery.submissions), delivery.submissions)
+	}
+
+	// Verify api-worker report routed to api-orch
+	var foundApi, foundWeb bool
+	for _, sub := range delivery.submissions {
+		if sub.target == "api-orch" && strings.Contains(sub.message, "api finished") {
+			foundApi = true
+		}
+		if sub.target == "main-orch" && strings.Contains(sub.message, "web finished") {
+			foundWeb = true
+		}
+	}
+	if !foundApi {
+		t.Errorf("api-worker report not routed to api-orch: %#v", delivery.submissions)
+	}
+	if !foundWeb {
+		t.Errorf("web-worker report not routed to fallback main-orch: %#v", delivery.submissions)
+	}
+}
+
 func TestCoordinatorStuckInterruptRateLimitAndCoalescing(t *testing.T) {
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	store := newCoordinatorStore(now)

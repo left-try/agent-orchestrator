@@ -11,7 +11,7 @@ SELECT COUNT(*) > 0 FROM sessions WHERE id = ?;
 INSERT INTO sessions (
     id, project_id, num, issue_id, kind, harness, reviewer_harness, reviewer_agent_config, auto_review_enabled, display_name,
     activity_state, activity_last_at, first_signal_at, is_terminated,
-    branch, workspace_path, workspace_repo_path, diff_base_sha, diff_base_ref, runtime_handle_id,
+    branch, workspace_path, workspace_repo_path, workspace_folder, diff_base_sha, diff_base_ref, runtime_handle_id,
     runtime_launch_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
     latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
@@ -23,7 +23,7 @@ INSERT INTO sessions (
     requested_output,
     created_at, updated_at, is_pinned, pinned_at, auto_inject_review, auto_inject_ci,
     provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    client_request_id, client_request_hash
+    client_request_id, client_request_hash, import_source, display_name_explicit
 ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -31,7 +31,7 @@ INSERT INTO sessions (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-    ?, ?, ?
+    ?, ?, ?, ?, ?, ?
 );
 
 -- name: GetClientRequestSession :one
@@ -46,7 +46,7 @@ UPDATE sessions SET client_request_committed = 1 WHERE id = ? AND client_request
 UPDATE sessions SET
     issue_id = ?, kind = ?, harness = ?, reviewer_harness = ?, reviewer_agent_config = ?, auto_review_enabled = ?,
     activity_state = ?, activity_last_at = ?, first_signal_at = ?, is_terminated = ?,
-    branch = CASE WHEN temporary_branch <> '' AND temporary_branch = ? THEN branch ELSE ? END, workspace_path = ?, workspace_repo_path = ?, diff_base_sha = ?, diff_base_ref = ?, runtime_handle_id = ?,
+    branch = CASE WHEN temporary_branch <> '' AND temporary_branch = ? THEN branch ELSE ? END, workspace_path = ?, workspace_repo_path = ?, workspace_folder = ?, diff_base_sha = ?, diff_base_ref = ?, runtime_handle_id = ?,
     runtime_launch_id = ?, agent_session_id = ?, agent_session_id_launch_id = ?, native_identity_observed_at = ?, prompt = ?,
     latest_user_prompt = ?, latest_user_prompt_at = ?, latest_assistant_update = ?, latest_assistant_update_at = ?,
     conversation_checkpoint_state = ?, conversation_checkpoint_generation = ?, conversation_checkpoint_native_id = ?,
@@ -275,13 +275,16 @@ SET session_mode = sqlc.arg(target_mode),
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id) AND session_mode = sqlc.arg(source_mode) AND is_terminated = 0;
 
+-- name: GetSessionNumFloor :one
+SELECT max_num FROM session_num_floors WHERE id_prefix = sqlc.arg(id_prefix);
+
 -- name: GetSession :one
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
-    workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
+    workspace_repo_path, workspace_folder, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
@@ -294,16 +297,16 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id
+    runtime_released_launch_id, import_source
 FROM sessions WHERE id = ?;
 
 -- name: GetSessionByAutomationRunID :one
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
-    workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
+    workspace_repo_path, workspace_folder, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
@@ -316,16 +319,16 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id
+    runtime_released_launch_id, import_source
 FROM sessions WHERE automation_run_id = ?;
 
 -- name: ListSessionsByProject :many
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
-    workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
+    workspace_repo_path, workspace_folder, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
@@ -338,16 +341,16 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id
+    runtime_released_launch_id, import_source
 FROM sessions WHERE project_id IS ? ORDER BY num;
 
 -- name: ListAllSessions :many
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
-    workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
+    workspace_repo_path, workspace_folder, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
@@ -360,7 +363,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id
+    runtime_released_launch_id, import_source
 FROM sessions ORDER BY project_id, num;
 
 -- name: ListChatHibernationCandidates :many
@@ -417,9 +420,11 @@ UPDATE sessions SET
     harness = sqlc.arg(harness),
     auto_review_enabled = sqlc.arg(auto_review_enabled),
     display_name = sqlc.arg(display_name),
+    display_name_explicit = sqlc.arg(display_name_explicit),
     activity_state = sqlc.arg(activity_state),
     activity_last_at = sqlc.arg(activity_last_at),
     is_terminated = 0,
+    workspace_folder = sqlc.arg(workspace_folder),
     session_mode = sqlc.arg(session_mode),
     model = sqlc.arg(model),
     effort = sqlc.arg(effort),
@@ -436,8 +441,13 @@ UPDATE sessions SET
     is_task_preparation = 0
 WHERE id = sqlc.arg(id) AND is_task_preparation = 1;
 
+-- name: BackfillSessionWorkspaceFolder :execrows
+UPDATE sessions
+SET workspace_folder = sqlc.arg(workspace_folder)
+WHERE id = sqlc.arg(id) AND workspace_folder = '';
+
 -- name: RenameSession :execrows
-UPDATE sessions SET display_name = ?, updated_at = ? WHERE id = ?;
+UPDATE sessions SET display_name = ?, display_name_explicit = 1, updated_at = ? WHERE id = ?;
 
 -- name: RenameSessionIfDisplayName :execrows
 UPDATE sessions

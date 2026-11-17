@@ -358,32 +358,43 @@ func TestSanitizeCopilotLoadedModeFailsWhenSetterOmitsCatalog(t *testing.T) {
 func TestPermissionConfigOptionsMapsAgyModesOntoApprovalTiers(t *testing.T) {
 	input := []ports.ChatConfigOption{{
 		ID:      "mode",
-		Current: ports.ChatConfigOptionValue{Select: "yolo"},
+		Current: ports.ChatConfigOptionValue{Select: "auto"},
 		Choices: []ports.ChatConfigOptionChoice{
 			{Value: "default", Name: "Default"},
 			{Value: "auto_edit", Name: "Auto Edit"},
+			{Value: "accept-edits", Name: "Accept Edits"},
+			{Value: "auto", Name: "Auto"},
 			{Value: "yolo", Name: "YOLO"},
 		},
 	}}
 	got := permissionConfigOptions(domain.HarnessAgy, input)
 	want := []struct {
-		mode domain.PermissionMode
-		name string
+		value string
+		mode  domain.PermissionMode
+		name  string
 	}{
-		{domain.PermissionModeDefault, "Use agent permissions"},
-		{domain.PermissionModeAcceptEdits, "Accept edits"},
-		{domain.PermissionModeAuto, "Auto-approve"},
+		{"default", domain.PermissionModeDefault, "Use agent permissions"},
+		{"auto_edit", domain.PermissionModeAcceptEdits, "Accept edits"},
+		{"accept-edits", domain.PermissionModeAcceptEdits, "Accept edits"},
+		{"auto", domain.PermissionModeAuto, "Auto-approve"},
+		{"yolo", domain.PermissionModeBypassPermissions, "Bypass permissions"},
 	}
 	for i, choice := range got[0].Choices {
-		if choice.PermissionMode != want[i].mode || choice.Name != want[i].name {
-			t.Fatalf("choice %q = (%q, %q), want (%q, %q)", choice.Value, choice.PermissionMode, choice.Name, want[i].mode, want[i].name)
+		if choice.Value != want[i].value || choice.PermissionMode != want[i].mode || choice.Name != want[i].name {
+			t.Fatalf("choice[%d] = (%q, %q, %q), want (%q, %q, %q)", i, choice.Value, choice.PermissionMode, choice.Name, want[i].value, want[i].mode, want[i].name)
 		}
 	}
 	settings, _ := settingsFromConfigOptions(domain.ConversationSettings{}, got)
 	if settings.ApprovalMode != domain.PermissionModeAuto {
-		t.Fatalf("settings approval = %q, want auto for yolo", settings.ApprovalMode)
+		t.Fatalf("settings approval = %q, want auto", settings.ApprovalMode)
 	}
-	if input[0].Choices[2].Name != "YOLO" {
+	input[0].Current = ports.ChatConfigOptionValue{Select: "yolo"}
+	got = permissionConfigOptions(domain.HarnessAgy, input)
+	settings, _ = settingsFromConfigOptions(domain.ConversationSettings{}, got)
+	if settings.ApprovalMode != domain.PermissionModeBypassPermissions {
+		t.Fatalf("settings approval = %q, want bypass for yolo", settings.ApprovalMode)
+	}
+	if input[0].Choices[4].Name != "YOLO" {
 		t.Fatal("mutated provider catalog")
 	}
 }

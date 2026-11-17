@@ -9,9 +9,9 @@ export type SessionNavigateTarget =
 	| { to: "/host/$hostId/project/$projectId/session/$sessionId"; params: { hostId: string; projectId: string; sessionId: string } }
 	| { to: "/host/$hostId/session/$sessionId"; params: { hostId: string; sessionId: string } };
 
-export function projectNavigateTarget(projectId: string, host: HostId = LOCAL_HOST) {
+export function projectNavigateTarget(projectId: string, host: HostId = LOCAL_HOST, folder?: string) {
 	return host === LOCAL_HOST
-		? { to: "/projects/$projectId" as const, params: { projectId } }
+		? { to: "/projects/$projectId" as const, params: { projectId }, ...(folder ? { search: { folder } } : {}) }
 		: { to: "/host/$hostId/project/$projectId" as const, params: { hostId: host, projectId } };
 }
 

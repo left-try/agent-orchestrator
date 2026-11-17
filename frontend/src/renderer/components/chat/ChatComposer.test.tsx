@@ -1,6 +1,8 @@
+import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
+import { CLOUD_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { appI18n } from "../../i18n/instance";
 import { purgeFileAttachmentsForSession } from "../../hooks/useFileAttachments";
-import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { Activity, Profiler } from "react";
@@ -335,7 +337,7 @@ describe("send keys", () => {
 			undefined,
 			expect.any(String),
 			undefined,
-			excerpts,
+			excerpts.map(upgradeExcerpt),
 		));
 	});
 
@@ -446,6 +448,18 @@ describe("send keys", () => {
 		const { field } = renderComposer();
 		expect(field).toHaveAttribute("contenteditable", "true");
 		expect(field).toHaveClass("min-h-[4.5rem]");
+	});
+
+	it("insets the draft and the toolbar's ends the same from both sides", () => {
+		const { field } = renderComposer();
+		// Equal padding on both sides, and any classic scrollbar's gutter reserved on both edges.
+		expect(field).toHaveClass("px-[7px]", "[scrollbar-gutter:stable_both-edges]");
+		expect(field.className).not.toMatch(/(^|\s)(pl|pr|ps|pe)-/);
+		// The placeholder reserves the same gutter, so typing starts where it began.
+		const placeholder = field.parentElement?.querySelector<HTMLElement>(".pointer-events-none.text-muted-foreground");
+		expect(placeholder).toHaveClass("px-[7px]", "overflow-hidden", "chat-composer-scrollbar", "[scrollbar-gutter:stable_both-edges]");
+		// The send circle sits on the form padding like the + does, so its right and bottom insets match.
+		expect(screen.getByRole("group", { name: "Send message controls" }).className).not.toMatch(/(^|\s)(me|mr|pe|pr)-/);
 	});
 
 	it("uses a circular primary send control that enables when armed", async () => {
@@ -834,7 +848,7 @@ describe("send keys", () => {
 		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("reselect it"));
 		const draft = readChatSessionDraft(sessionId).composer;
 		expect(draft.delivery).toBeUndefined();
-		expect(draft.excerpts).toEqual(excerpts);
+		expect(draft.excerpts).toEqual(excerpts.map(upgradeExcerpt));
 		expect(screen.queryByRole("button", { name: "Retry message safely" })).not.toBeInTheDocument();
 	});
 
@@ -850,7 +864,7 @@ describe("send keys", () => {
 		fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
 		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
 		expect(onSteer).not.toHaveBeenCalled();
-		expect(onSend.mock.calls[0]?.[4]).toEqual(excerpts);
+		expect(onSend.mock.calls[0]?.[4]).toEqual(excerpts.map(upgradeExcerpt));
 	});
 
 	it.each([
@@ -2330,6 +2344,56 @@ describe("attachments", () => {
 		]);
 	});
 
+	// A draft keeps its files when it moves to a chat that cannot take them (a
+	// new task's Cloud standalone agent): they stay as chips with that chat's
+	// reason, and nothing is sent until they are removed.
+	it("keeps files a chat cannot take as chips with its reason, sending nothing until they are removed", async () => {
+		const reason = "Files can't start a standalone agent. Remove them to continue.";
+		const held = renderComposer({ draftSessionId: "composer-files-refused", holdAttachments: true });
+		fireEvent.paste(held.field, { clipboardData: clipboardData([textFile()]) });
+		await screen.findByLabelText("Remove notes.txt");
+		cleanup();
+		const { onSend, field } = renderComposer({ draftSessionId: "composer-files-refused", attachmentsRefusal: reason });
+		await screen.findByLabelText("Remove notes.txt");
+		expect(screen.getByText(reason)).toBeTruthy();
+		await typeInComposer(field, "start without the file");
+		await userEvent.click(field);
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).not.toHaveBeenCalled();
+		expect(screen.queryByText("The files are not durably available. Nothing was sent.")).toBeNull();
+		await userEvent.click(screen.getByLabelText("Remove notes.txt"));
+		await waitFor(() => expect(screen.queryByText(reason)).toBeNull());
+		await userEvent.click(field);
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		expect(onSend.mock.calls[0]?.[0]).toBe("start without the file");
+	});
+
+	// A send whose answer was lost keeps its identity and its files until its
+	// outcome is known: a chat that takes no new files does not hold back its
+	// retry, which goes with the same id and the same files, and says nothing
+	// about files while that send is pending.
+	it("retries a pending send with its files even where new files are refused", async () => {
+		const reason = "Files can't start a standalone agent. Remove them to continue.";
+		const sessionId = "composer-files-pending-retry";
+		const onSend = vi.fn().mockRejectedValueOnce(new Error("response lost")).mockResolvedValue(undefined);
+		const first = render(<ChatComposer parkUnsentSends={false} draftSessionId={sessionId} holdAttachments onSend={onSend} />);
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "read this file");
+		fireEvent.paste(field, { clipboardData: clipboardData([textFile()]) });
+		await screen.findByLabelText("Remove notes.txt");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(screen.getByRole("button", { name: "Retry message safely" })).toBeEnabled());
+		first.unmount();
+		render(<ChatComposer parkUnsentSends={false} draftSessionId={sessionId} holdAttachments attachmentsRefusal={reason} onSend={onSend} />);
+		await screen.findByLabelText("Remove notes.txt");
+		expect(screen.queryByText(reason)).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+		expect(onSend.mock.calls[1]).toEqual(onSend.mock.calls[0]);
+		expect(onSend.mock.calls[1]?.[1]).toEqual([{ mimeType: "text/plain", data: btoa("hello"), name: "notes.txt" }]);
+	});
+
 	it("keeps held file bytes available after a definitive send rejection", async () => {
 		const onSend = vi.fn()
 			.mockRejectedValueOnce(Object.assign(new Error("Agent not installed"), { code: "TASK_CREATE_FAILED" }))
@@ -2619,6 +2683,26 @@ describe("attachments", () => {
 		expect(stage).toHaveBeenCalledTimes(1);
 		await waitFor(() => expect(screen.queryByRole("listitem")).not.toBeInTheDocument());
 		expect(field.textContent).toBe("");
+	});
+
+	it("opens an attached image at full size from the strip", async () => {
+		const { field } = renderComposer({
+			draftSessionId: "composer-strip-image",
+			onStageAttachments: vi.fn().mockResolvedValue([".ao/attachments/shot.png"]),
+		});
+		fireEvent.paste(field, { clipboardData: clipboardData([png()]) });
+		await userEvent.click(await screen.findByRole("button", { name: "Open image: shot.png" }));
+		expect(within(await screen.findByRole("dialog")).getByRole("img", { name: "shot.png" })).toBeInTheDocument();
+	});
+
+	it("labels an attached file in the strip with its type and size", async () => {
+		const { field } = renderComposer({
+			draftSessionId: "composer-strip-file",
+			onStageAttachments: vi.fn().mockResolvedValue([".ao/attachments/notes.txt"]),
+		});
+		fireEvent.paste(field, { clipboardData: clipboardData([textFile()]) });
+		expect(await screen.findByText("TXT · 5 B")).toBeInTheDocument();
+		expect(screen.getByText("notes.txt")).toBeInTheDocument();
 	});
 
 	it("retains retry attachments while the next draft is typed and removes them after acceptance", async () => {
@@ -3040,21 +3124,94 @@ describe("unavailable states", () => {
 		expect(onInterrupt).not.toHaveBeenCalled();
 	});
 
-	it("explains when a send is blocked by the previous in-flight message", async () => {
-		const onSend = vi.fn().mockImplementation(
-			() => new Promise<void>(() => {
-				/* keep pending */
-			}),
-		);
-		render(<ChatComposer busy onSend={onSend} willQueue />);
+	it("sends a message entered while the previous one is in flight as soon as that one lands", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const view = render(<ChatComposer busy onSend={onSend} willQueue />);
 		const field = screen.getByLabelText("Message the agent");
 
 		await typeInComposer(field, "follow up");
 		await userEvent.keyboard("{Enter}");
 
 		expect(onSend).not.toHaveBeenCalled();
-		expect(screen.getByRole("alert")).toHaveTextContent(/still sending the previous message/i);
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(field).toHaveTextContent("follow up");
+
+		view.rerender(<ChatComposer onSend={onSend} willQueue />);
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onSend).toHaveBeenCalledWith("follow up");
+		await waitFor(() => expect(field.textContent).toBe(""));
 	});
+
+	it("keeps a held message in the box when the previous send is parked as unsent", async () => {
+		const sessionId = "composer-held-behind-parked-send";
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const view = render(<ChatComposer busy onSend={onSend} willQueue draftSessionId={sessionId} />);
+		const field = screen.getByLabelText("Message the agent");
+
+		await typeInComposer(field, "follow up");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		expect(onSend).not.toHaveBeenCalled();
+
+		// Another surface's send gets no answer and moves to the unsent strip.
+		await act(async () => {
+			const lost = prepareChatComposerDelivery(sessionId, {
+				kind: "send",
+				optimistic: true,
+				composerText: "follow up",
+				attachments: [],
+				requestText: "the message that got no answer",
+				clientMessageId: "lost-before-held",
+			});
+			if (!lost.ok) throw new Error("Failed to prepare test delivery");
+			expect(parkChatComposerDelivery(sessionId, "lost-before-held").ok).toBe(true);
+		});
+		view.rerender(<ChatComposer onSend={onSend} willQueue draftSessionId={sessionId} />);
+		await act(async () => {});
+
+		expect(onSend).not.toHaveBeenCalled();
+		expect(field).toHaveTextContent("follow up");
+	});
+
+	it("does not send a held message that was edited before the previous one landed", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const view = render(<ChatComposer busy onSend={onSend} willQueue />);
+		const field = screen.getByLabelText("Message the agent");
+
+		await typeInComposer(field, "follow up");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		await typeInComposer(field, " and more");
+
+		view.rerender(<ChatComposer onSend={onSend} willQueue />);
+		await act(async () => {});
+
+		expect(onSend).not.toHaveBeenCalled();
+		expect(field).toHaveTextContent("follow up and more");
+	});
+});
+
+it("keeps oversized excerpt sends in the draft and translates the error", async () => {
+	const sessionId = "composer-excerpt-size-localized";
+	const refs = [{ id: "large", conversationId: "c", messageId: "m", revision: 1, text: "文".repeat(8200), role: "assistant" as const }];
+	writeChatExcerptReferences(sessionId, refs);
+	const onSend = vi.fn();
+	const view = render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
+	try {
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "explain this");
+		fireEvent.keyDown(field, { key: "Enter" });
+		expect(await screen.findByRole("alert")).toHaveTextContent("Selected text exceeds 24 KiB");
+		await act(async () => { await appI18n.changeLanguage("fr"); });
+		expect(screen.getByRole("alert")).toHaveTextContent("Le texte sélectionné dépasse 24 Kio");
+		expect(onSend).not.toHaveBeenCalled();
+		expect(readChatSessionDraft(sessionId).composer).toMatchObject({ text: "explain this", excerpts: refs });
+		expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined();
+	} finally {
+		view.unmount();
+		await appI18n.changeLanguage("en");
+	}
 });
 
 it("shows restored composer recovery notices and actions in the selected language", async () => {
@@ -3248,6 +3405,46 @@ it.each([
 	expect(screen.getByRole("list", { name: "Attached files" }).querySelector("img"))
 		.toHaveAttribute("src", attachmentURL(assetBaseUrl ?? getApiBaseUrl(), assetSessionId ?? draftSessionId, path));
 	expect(props.onStageAttachments).toHaveBeenCalledOnce();
+});
+
+it.each([
+	{ destination: "local", messageByteLimit: undefined, accepts: true },
+	{ destination: "cloud", messageByteLimit: CLOUD_CHAT_MESSAGE_BYTES, accepts: false },
+].flatMap(destination => ["excerpt", "file"].map(annotation => ({ ...destination, annotation }))))(
+	"uses the $destination budget for a 70 KiB question with a captured $annotation", async ({ destination, messageByteLimit, accepts, annotation }) => {
+		const sessionId = `budget-${destination}-${annotation}`;
+		const text = "q".repeat(70 * 1024);
+		writeChatComposerText(sessionId, text);
+		if (annotation === "excerpt") writeChatExcerptReferences(sessionId, EXCERPTS);
+		else writeChatFileReferences(sessionId, [captureFileReference({ path: "code.ts", side: "file", line: 1, endLine: 1, lines: [{ kind: "context", oldNo: 1, newNo: 1, text: "code();" }] }, sessionId)]);
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} messageByteLimit={messageByteLimit} fileReferencesEnabled />);
+		fireEvent.keyDown(screen.getByLabelText("Message the agent"), { key: "Enter" });
+		if (accepts) {
+			await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+			expect(onSend.mock.calls[0][0]).toBe(text);
+		} else {
+			await screen.findByText(appI18n.t("chat.draft.excerptMessageLimit"));
+			expect(onSend).not.toHaveBeenCalled();
+			expect(readChatSessionDraft(sessionId).composer.text).toBe(text);
+		}
+	},
+);
+
+it("keeps a frozen retry unchanged after the destination budget is lowered", async () => {
+	const sessionId = "budget-frozen-retry";
+	const text = "q".repeat(70 * 1024);
+	writeChatComposerText(sessionId, text);
+	writeChatExcerptReferences(sessionId, EXCERPTS);
+	prepareChatComposerDelivery(sessionId, { kind: "send", composerText: text, requestText: text, attachments: [], excerpts: EXCERPTS, clientMessageId: "frozen-budget-receipt" });
+	const onSend = vi.fn().mockResolvedValue(undefined);
+	const frozen = structuredClone(readChatSessionDraft(sessionId).composer.delivery);
+	render(<ChatComposer parkUnsentSends={false} draftSessionId={sessionId} onSend={onSend} messageByteLimit={CLOUD_CHAT_MESSAGE_BYTES} />);
+	await userEvent.click(await screen.findByRole("button", { name: "Retry message safely" }));
+	await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+	expect(onSend.mock.calls[0][0]).toBe(frozen!.requestText);
+	expect(onSend.mock.calls[0][2]).toBe(frozen!.clientMessageId);
+	expect(onSend.mock.calls[0][4]).toEqual(frozen!.excerpts);
 });
 
 it("keeps cloud captures in shared drafts through reload and retries with the same delivery", async () => {

@@ -36,10 +36,12 @@ export type SessionActivity = {
 };
 
 export const KANBAN_COLUMNS = [
+	"backlog",
 	"building",
 	"validating",
 	"needs_review",
 	"ready",
+	"done",
 	"archive",
 ] as const;
 
@@ -57,22 +59,24 @@ export function isKanbanColumn(value: string): value is KanbanColumn {
 export const DISPLAY_STATUSES = [
 	"Working",
 	"Blocked",
+	"Needs input",
 	"Exited",
 	"No signal",
 	"Interrupted",
-	"Awaiting PR",
+	"Idle",
 	"Fixing CI failures",
 	"Addressing comments",
-	"Needs review",
 	"Review scheduled",
 	"Reviewing",
-	"Review failed",
-	"Review pending",
+	"Retrying review",
 	"Draft",
+	"Awaiting review",
+	"Review failed",
+	"Review cancelled",
 	"CI failing",
+	"Merge conflicts",
 	"Commented",
 	"Changes requested",
-	"Needs human review",
 	"Mergeable",
 	"Approved",
 	"Merged",

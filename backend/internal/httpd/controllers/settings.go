@@ -22,6 +22,8 @@ type SettingsService interface {
 	SetVersionRefresh(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	SetComputerUse(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	SetSessionRetentionDays(ctx context.Context, days int) (settingssvc.Snapshot, error)
+	SetAccountHandoff(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
+	SetKanbanSettings(ctx context.Context, settings domain.KanbanSettings) (settingssvc.Snapshot, error)
 	ChatHarnesses(candidates []domain.AgentHarness) []domain.AgentHarness
 	Offering() settingssvc.Offering
 }
@@ -43,6 +45,8 @@ func (c *SettingsController) Register(r chi.Router) {
 	r.Patch("/settings/version-refresh", c.setVersionRefresh)
 	r.Patch("/settings/computer-use", c.setComputerUse)
 	r.Patch("/settings/session-retention", c.setSessionRetention)
+	r.Patch("/settings/account-handoff", c.setAccountHandoff)
+	r.Patch("/settings/kanban", c.setKanban)
 	r.Patch("/settings/harness-defaults/{agent}", c.setHarnessDefault)
 }
 
@@ -174,6 +178,48 @@ func (c *SettingsController) setSessionRetention(w http.ResponseWriter, r *http.
 	envelope.WriteJSON(w, http.StatusOK, c.response(snapshot))
 }
 
+func (c *SettingsController) setAccountHandoff(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "PATCH", "/api/v1/settings/account-handoff")
+		return
+	}
+	var req UpdateAccountHandoffRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.Enabled == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"ACCOUNT_HANDOFF_INVALID", "enabled must be true or false", nil)
+		return
+	}
+	snapshot, err := c.Svc.SetAccountHandoff(r.Context(), *req.Enabled)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, c.response(snapshot))
+}
+
+func (c *SettingsController) setKanban(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "PATCH", "/api/v1/settings/kanban")
+		return
+	}
+	var req UpdateKanbanSettingsRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	snapshot, err := c.Svc.SetKanbanSettings(r.Context(), domain.KanbanSettings{
+		MoveMergedToDone: req.MoveMergedToDone,
+		Columns:          req.Columns,
+	})
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, c.response(snapshot))
+}
+
 func (c *SettingsController) response(snapshot settingssvc.Snapshot) SettingsResponse {
 	// Reported so the client can warn that choosing chat narrows which agents are
 	// available, instead of letting the user discover it at spawn time.
@@ -193,7 +239,9 @@ func (c *SettingsController) response(snapshot settingssvc.Snapshot) SettingsRes
 		VersionRefresh:         snapshot.VersionRefresh,
 		ComputerUse:            snapshot.ComputerUse,
 		SessionRetentionDays:   snapshot.SessionRetentionDays,
+		Kanban:                 snapshot.Kanban,
 		CloudEnabled:           offering.CloudEnabled(),
+		AccountHandoff:         snapshot.AccountHandoff,
 		CloudControlPlaneURL:   offering.CloudControlPlaneURL,
 		TrackerIntakeEnabled:   offering.TrackerIntakeEnabled,
 	}

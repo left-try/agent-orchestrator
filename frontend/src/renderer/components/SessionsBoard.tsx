@@ -1,20 +1,18 @@
 import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
-	SessionsArchiveView,
 	SessionsBoardGridView,
-	archiveToggleOffsetClassName,
 	chipTone,
 	largestSession,
 	type ChipTone,
 } from "@aoagents/product-ui";
-import { AlertTriangle, RotateCw } from "@/components/app-icons";
+import { AlertTriangle, Archive, Plus, RotateCw, SlidersHorizontal, WifiOff } from "@/components/app-icons";
 import {
 	CLOUD_PROJECT_KIND,
-	STANDALONE_PROJECT_KIND,
+	isScratchpadWorkspace,
 	STANDALONE_WORKSPACE_ID,
 	type WorkspaceSession,
 	isOrchestratorSession,
@@ -23,33 +21,36 @@ import {
 	workerSessions,
 	hasConfiguredOrchestratorAgent,
 } from "../types/workspace";
-import {
-	boardKanbanColumnOrder,
-	getKanbanColumnView,
-	type KanbanColumnView,
-} from "../lib/session-presentation";
+import { isArchivedSession } from "../lib/standalone-archive";
+import { getKanbanColumnView, type KanbanColumnView } from "../lib/session-presentation";
 import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
-import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionParticipants } from "../hooks/useSessionParticipants";
 import { useCloudProjectsQuery, useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { FREESTYLE_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
+import { defaultKanbanSettings, useSettings } from "../hooks/useSettings";
+import { useBacklogItems, type BacklogItem } from "../hooks/useBacklog";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
-import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
+import { ProjectImportOffer } from "./ProjectImportOffer";
+import { KanbanCustomizeDialog } from "./KanbanCustomizeDialog";
+import { AddBacklogItemDialog, BacklogItemDetailDialog } from "./BacklogDialogs";
+import { noDragStyle, PageTopbar, PageTopbarTitle } from "./PageTopbar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { formatTimeCompact } from "../lib/format-time";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { demoBoardSessions } from "../lib/demo-board-sessions";
-import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
-import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
 import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { labelForHost } from "../lib/host-clients";
+import type { RemoteHost } from "../hooks/useRemoteHosts";
+import { cn } from "../lib/utils";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
 import { useShellMaybe } from "../lib/shell-context";
@@ -59,10 +60,9 @@ import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useDiagnosticsEnabled, usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
 import { AppMemoryIndicator, toSessionFacts } from "./SessionMemoryPanel";
 import { Button } from "./ui/button";
-import { filterSessionsByFolder, workspaceFolderForSession } from "../lib/workspace-folder";
+import { sessionMatchesWorkspaceFolder } from "../lib/workspace-folder";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import {
-	ArchivedSessionCardAdapter,
 	BoardSessionCardAdapter,
 	sessionsBoardLabels,
 } from "./SessionsBoardAdapters";
@@ -71,33 +71,33 @@ type SessionsBoardProps = {
 	/** When set, the board shows only this project's sessions. */
 	projectId?: string;
 	hostId?: string;
+	/** When set, narrows the workspace board to one child folder's Kanban + orchestrator. */
+	folder?: string;
 };
 
-
-// Live merged sessions remain in-flow. A terminated runtime is archived even
-// when its SCM outcome remains `merged`, which is exactly what the daemon's
-// `archive` column means.
-function isArchivedSession(session: WorkspaceSession): boolean {
-	return (
-		session.kanbanColumn === "archive" ||
-		session.isTerminated === true ||
-		session.status === "terminated"
-	);
-}
-
-export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
+export function SessionsBoard({ projectId, hostId, folder }: SessionsBoardProps) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const shell = useShellMaybe();
 	const connected = useConnectedHosts().includes(hostId ?? "");
-	const scopeKey = refKey({ host: hostId ?? LOCAL_HOST, id: projectId ?? "all" });
-	const [folderFilter, setFolderFilter] = useState("all");
-	useEffect(() => setFolderFilter("all"), [scopeKey]);
-	// Lanes follow the daemon's delivery order: building -> validating ->
-	// in review -> ready. The middle two are one review-feedback loop, split by
-	// whose turn it is.
-	const columns: KanbanColumnView[] = boardKanbanColumnOrder.map((column) => getKanbanColumnView(column, t));
+	const hostOffline = Boolean(hostId) && !connected;
+	const savedHost = hostId ? shell?.remoteHosts?.find((host) => host.hostId === hostId) : undefined;
+	const hostLabel = hostId ? labelForHost(hostId) ?? savedHost?.label ?? hostId : undefined;
+	const activeFolder = folder?.trim() || undefined;
+	const scopeKey = refKey({ host: hostId ?? LOCAL_HOST, id: projectId ?? "all", folder: activeFolder ?? "" });
+	const { settings } = useSettings(hostId, !hostId);
+	const kanbanSettings = settings?.kanban ?? defaultKanbanSettings();
+	const columns: KanbanColumnView[] = useMemo(() => {
+		return kanbanSettings.columns
+			.filter((pref) => pref.enabled)
+			.map((pref) => {
+				const base = getKanbanColumnView(pref.id, t);
+				const customLabel = pref.label?.trim();
+				return customLabel ? { ...base, label: customLabel } : base;
+			});
+	}, [kanbanSettings.columns, t]);
+	const backlogEnabled = !hostId && kanbanSettings.columns.some((col) => col.id === "backlog" && col.enabled);
 	const localWorkspaceQuery = useWorkspaceQuery();
 	const remoteProjectQuery = useRemoteProjectQuery(hostId ?? "", projectId ?? "");
 	const all = localWorkspaceQuery.data ?? [];
@@ -105,6 +105,19 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		? remoteProjectQuery.data ? [remoteProjectQuery.data] : []
 		: projectId ? all.filter((candidate) => candidate.id === projectId) : all;
 	const workspace = projectId ? workspaces[0] : undefined;
+	const folderRepos = workspace?.workspaceRepos ?? [];
+	const folderRepo = activeFolder
+		? folderRepos.find((repo) => repo.relativePath === activeFolder || repo.name === activeFolder)
+		: undefined;
+	const backlogItems = useBacklogItems(projectId, backlogEnabled && workspaces.length > 0).items;
+	const projectNamesById = useMemo(
+		() => new Map(workspaces.map((candidate) => [candidate.id, candidate.name])),
+		[workspaces],
+	);
+	const [customizeOpen, setCustomizeOpen] = useState(false);
+	const [addBacklogOpen, setAddBacklogOpen] = useState(false);
+	const [selectedBacklogItem, setSelectedBacklogItem] = useState<BacklogItem | null>(null);
+	const [backlogDetailOpen, setBacklogDetailOpen] = useState(false);
 	// A Freestyle cloud project's orchestrator starts in place (see
 	// OrchestratorStartingChat); its session does not exist yet, so the
 	// project's provider decides, as the control plane's does.
@@ -118,16 +131,23 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		projectSandboxProvider(cloudProject.config, offering) === FREESTYLE_PROVIDER;
 	// Board chrome stays route-oriented; project context remains in the sidebar.
 	const boardLabel = t("shell.board");
-	const liveSessions = workspaces.flatMap((workspace) => workerSessions(workspace.sessions));
+	const folderLabel = folderRepo?.name ?? activeFolder;
+	const liveSessions = workspaces
+		.flatMap((candidate) => workerSessions(candidate.sessions))
+		.filter((session) => !session.needsResume || isArchivedSession(session))
+		.filter((session) => !activeFolder || sessionMatchesWorkspaceFolder(session, activeFolder, folderRepos));
 	const demoWorkspaceId = projectId ?? workspaces[0]?.id;
-	const sessions = !hostId && usesPreviewWorkspaceData && demoWorkspaceId && liveSessions.length === 0
+	const sessions = !hostId && usesPreviewWorkspaceData && demoWorkspaceId && liveSessions.length === 0 && !activeFolder
 		? demoBoardSessions(demoWorkspaceId)
 		: liveSessions;
-	const orchestrator = projectId ? newestActiveOrchestrator(workspaces[0]?.sessions ?? []) : undefined;
+	const orchestrator = projectId
+		? newestActiveOrchestrator(workspaces[0]?.sessions ?? [], activeFolder ?? "")
+		: undefined;
 	const projectActions = useProjectOrchestratorAction({
 		projectId,
 		project: workspace,
 		orchestrator,
+		folder: activeFolder,
 		source: "board",
 		hostId,
 	});
@@ -151,53 +171,43 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		ui.setAutoStartOrchestrator(projectId, false);
 		openOrchestrator();
 	}, [autoStartFlagged, openOrchestrator, orchestrator, projectId, startsInPlace, workspace?.kind]);
+	// A Cloud standalone agent has no board: its one session is the agent.
+	// Arriving on its project (archiving it from Pinned) leaves for Home.
+	useEffect(() => {
+		if (workspace?.standaloneAgent) void navigate({ to: "/", replace: true });
+	}, [navigate, workspace?.standaloneAgent]);
 	useSessionShortcut("open-orchestrator", () => {
-		if (!projectId || projectId === STANDALONE_WORKSPACE_ID || workspace?.kind === STANDALONE_PROJECT_KIND || workspace?.shared) return;
+		if (!projectId || projectId === STANDALONE_WORKSPACE_ID || isScratchpadWorkspace(workspace) || workspace?.shared) return;
 		projectActions.openOrchestrator();
 	}, Boolean(projectId) && !projectActions.isSpawning && !isProvisioning);
 	useSessionMenuAvailable(
 		"open-orchestrator",
-		Boolean(projectId) && projectId !== STANDALONE_WORKSPACE_ID && workspace?.kind !== STANDALONE_PROJECT_KIND && !workspace?.shared && !projectActions.isSpawning && !isProvisioning,
+		Boolean(projectId) && projectId !== STANDALONE_WORKSPACE_ID && !isScratchpadWorkspace(workspace) && !workspace?.shared && !projectActions.isSpawning && !isProvisioning,
 	);
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
-	const health = workspace ? orchestratorHealth(workspace, isProjectRestarting) : { state: "ok" as const };
+	const health = workspace ? orchestratorHealth(workspace, isProjectRestarting, activeFolder ?? "") : { state: "ok" as const };
 	// Someone this project was shared with works through what was shared and
 	// the owner's orchestrator: they can't start tasks or an orchestrator
 	// here, so the board offers neither and doesn't ask them to.
 	const guest = Boolean(workspace?.shared);
-	const archived = sessions
-		.filter(isArchivedSession)
-		.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+	// The archive itself is the shell's modal; the board only shows its count.
+	const archivedCount = sessions.filter(isArchivedSession).length;
 	const activeSessions = sessions.filter((candidate) => !isArchivedSession(candidate));
 	// Who is in each shared cloud session, read without joining any of them.
 	const participantsBySession = useSessionParticipants(activeSessions, !hostId);
 	const { userId: cloudUserId } = useCloudCp(!hostId && activeSessions.some((session) => Boolean(session.cloud)));
-	const folderRepos = workspace?.workspaceRepos ?? [];
-	const globalFolderOptions = !projectId ? all.flatMap((candidate) => (candidate.workspaceRepos ?? []).map((repo) => ({
-		value: `${candidate.id}::${repo.relativePath}`,
-		label: `${candidate.name} / ${repo.name}`,
-		workspaceId: candidate.id,
-		relativePath: repo.relativePath,
-	}))) : [];
-	const boardSessions = (projectId
-		? filterSessionsByFolder(activeSessions, folderFilter, folderRepos)
-		: folderFilter === "all"
-			? activeSessions
-			: folderFilter === "__workspace_wide__"
-				? activeSessions.filter((session) => {
-					const repos = all.find((candidate) => candidate.id === session.workspaceId)?.workspaceRepos ?? [];
-					return repos.length === 0 || workspaceFolderForSession(session, repos).id === "__workspace_wide__";
-				})
-				: activeSessions.filter((session) => {
-					const option = globalFolderOptions.find((candidate) => candidate.value === folderFilter);
-					return Boolean(option && session.workspaceId === option.workspaceId && session.workspaceFolder === option.relativePath);
-				})).map((session) =>
+	const boardSessions = activeSessions.map((session) =>
 		session.status === "no_signal" || session.displayStatus === "No signal"
 			? { ...session, kanbanColumn: "building" as const }
 			: session,
-	);
+	).map((session) => {
+		if (!kanbanSettings.moveMergedToDone && session.kanbanColumn === "done") {
+			return { ...session, kanbanColumn: "ready" as const };
+		}
+		return session;
+	});
 	const boardLabels = sessionsBoardLabels(t);
 	const presentation = useBoardPresentation({
 		projectId,
@@ -205,6 +215,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		isError: localWorkspaceQuery.isError,
 		hasProjects: workspaces.length > 0,
 		hasWorkerSessions: liveSessions.length > 0,
+		hasBacklogContent: backlogEnabled,
 	});
 	const showStartup = !hostId && presentation.showStartup;
 	const showWelcome = !hostId && presentation.showWelcome;
@@ -217,6 +228,19 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const diagnostics = useDiagnosticsEnabled();
 	// The light leads the board's actions, before the Task button, not in the archive bar.
 	const memoryLight = diagnostics && !hostId ? <AppMemoryIndicator /> : null;
+	const customizeButton = !hostId && workspaces.length > 0 ? (
+		<Button
+			aria-label={t("kanban.customize")}
+			data-testid="board-customize-button"
+			onClick={() => setCustomizeOpen(true)}
+			size="sm"
+			type="button"
+			variant="quiet"
+		>
+			<SlidersHorizontal className="size-icon-md" aria-hidden="true" />
+			<span data-compact-label="">{t("kanban.customize")}</span>
+		</Button>
+	) : null;
 	// Per-session readings feed each card's resource chip. Chips are grey
 	// unless the machine is tight and the card is part of the fix (idle, or
 	// the single largest).
@@ -232,11 +256,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		return (session: WorkspaceSession): ChipTone =>
 			chipTone(pressure ?? "fine", facts.find((f) => f.id === session.id) ?? toSessionFacts(session, memoryBySession?.get(session.id), now), largest);
 	}, [sessions, memoryBySession, pressure]);
-	const hasArchive = archived.length > 0;
+	const hasArchive = archivedCount > 0;
 	const terminateSession = useTerminateSession();
 	const activeScopeRef = useRef(scopeKey);
 	activeScopeRef.current = scopeKey;
-
 	const openSession = useCallback((session: WorkspaceSession) => {
 		if (session.kind === "worker") recordManualWorkerOpen(session.id, hostId);
 		void navigate(sessionNavigateTarget(session.workspaceId, session.id, hostId));
@@ -260,7 +283,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			setProjectRestarting(projectId, true, hostId);
 			setOrchestratorStartupError(projectId, null, hostId);
 			try {
-				const sessionId = await openRemoteOrchestrator(hostId, projectId, orchestrator, undefined, true, "restart");
+				const sessionId = await openRemoteOrchestrator(hostId, projectId, orchestrator, undefined, true, "restart", activeFolder);
 				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				if (activeScopeRef.current === scopeKey) void navigate(sessionNavigateTarget(projectId, sessionId, hostId));
 			} catch (error) {
@@ -276,6 +299,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			navigate,
 			setProjectRestarting,
 			setOrchestratorReplacementError,
+			workspaceFolder: activeFolder,
 		});
 	};
 
@@ -283,16 +307,24 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		<>
 			<ProjectTerminationFeedback projectId={projectId} hostId={hostId} />
 			{memoryLight}
+			{customizeButton}
 			{guest ? null : <ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />}
 		</>
-	) : memoryLight ?? undefined;
+	) : hostOffline ? (
+		<HostOfflineStatus host={savedHost} label={hostLabel ?? ""} updatedAt={workspace ? remoteProjectQuery.dataUpdatedAt : undefined} />
+	) : memoryLight || customizeButton ? (
+		<>
+			{memoryLight}
+			{customizeButton}
+		</>
+	) : undefined;
 
 	if (projectId && (isProvisioning || projectActions.isSpawning || autoStartPending)) {
 		return <OrchestratorStartingChat
 			cloud={workspace?.kind === CLOUD_PROJECT_KIND || autoStartPending}
 			freestyle={startsInPlace || autoStartPending}
-			coderWorkspaceUrl={workspace?.sessions.find((session) => session.kind === "orchestrator")?.cloud?.coderWorkspaceUrl}
-			harness={workspace?.orchestratorAgent ?? workspace?.sessions.find((session) => session.kind === "orchestrator")?.provider}
+			coderWorkspaceUrl={orchestrator?.cloud?.coderWorkspaceUrl}
+			harness={workspace?.orchestratorAgent ?? orchestrator?.provider}
 		/>;
 	}
 
@@ -304,13 +336,13 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						data-testid="board-topbar-label"
 					>
 						{boardLabel}
-						{hostId ? <span className="truncate text-muted-foreground">· {labelForHost(hostId) ?? hostId}</span> : null}
+						{folderLabel ? <span className="truncate text-muted-foreground">· {folderLabel}</span> : null}
+						{hostLabel ? <span className="truncate text-muted-foreground">· {hostLabel}</span> : null}
 					</PageTopbarTitle>
 				)}
 				actions={showWelcome ? undefined : actions}
 			/>
-			{hostId && !connected ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("remote.hostOffline")}</p> : null}
-			{hostId && remoteProjectQuery.isError ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("shell.couldNotLoadProjects")}</p> : null}
+			{connected && remoteProjectQuery.isError ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("shell.couldNotLoadProjects")}</p> : null}
 			{hostId && remoteProjectQuery.isSuccess && !workspace ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("session.notFound")}</p> : null}
 			{hostId && projectId && connected && workspace && !orchestrator && !hasConfiguredOrchestratorAgent(workspace) ? (
 				<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
@@ -319,12 +351,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 				</div>
 			) : null}
 
-			{/* Reserve only the collapsed archive bar. Expanded archive overlays the
-			    board so lane height (and Needs You scrollbars) stay stable. */}
-			<div
-				className={cn("min-h-0 flex-1 overflow-hidden", hasArchive && archiveToggleOffsetClassName)}
-				style={hasArchive ? { clipPath: "inset(0 0 var(--sessions-archive-height, 58px) 0)" } : undefined}
-			>
+			<div className={cn("min-h-0 flex-1 overflow-hidden", hostOffline && workspace && "opacity-75")} data-host-offline={hostOffline && workspace ? "" : undefined}>
 				{projectId && !guest && health.state !== "ok" && (!hostId || connected && (health.state !== "missing" || hasConfiguredOrchestratorAgent(workspace))) ? (
 					<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
 						<AlertTriangle className="size-icon-base shrink-0 text-warning" aria-hidden="true" />
@@ -359,26 +386,97 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			) : null}
 				{!hostId && (presentation.workspaceStartupState === "error" || localWorkspaceQuery.isError) ? (
 					<p className="py-10 text-center text-xs text-passive">{t("shell.couldNotLoadSessions")}</p>
+				) : hostOffline && !workspace ? (
+					<div className="flex h-full min-h-0 items-center justify-center overflow-y-auto" data-testid="board-host-offline-empty">
+						<div className="flex w-full max-w-xl flex-col items-center px-4 pb-empty-offset-y text-center">
+							<h2 className="text-subtitle font-semibold tracking-tight text-foreground">{hostLabel}</h2>
+							<p className="mt-2 text-md-sm leading-relaxed text-muted-foreground">{t(hostOfflineReasonKey(savedHost))}</p>
+						</div>
+					</div>
 				) : hostId && !workspace ? null : showWelcome ? (
 				<BoardWelcome />
 				) : showProjectEmpty ? (
-					<ProjectBoardEmpty actions={guest ? null : <ProjectBoardActions actions={projectActions} placement="empty" />} />
+					<ProjectBoardEmpty
+						actions={guest ? null : <ProjectBoardActions actions={projectActions} placement="empty" />}
+						offer={projectId && !hostId && !activeFolder ? <ProjectImportOffer className="mt-8 w-full text-left" projectId={projectId} /> : null}
+					/>
+				) : columns.length === 0 ? (
+					<div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-4 text-center">
+						<p className="text-sm text-muted-foreground">{t("kanban.emptyAllColumns")}</p>
+						{!hostId ? (
+							<Button onClick={() => setCustomizeOpen(true)} size="sm" type="button" variant="secondary">
+								{t("kanban.customize")}
+							</Button>
+						) : null}
+					</div>
 				) : (
-					<div className="flex h-full min-h-0 flex-col">
-						{(projectId ? folderRepos.length > 0 : globalFolderOptions.length > 0) ? <label className="flex shrink-0 items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
-							<span>{t("shell.folderFilter", { defaultValue: "Folder" })}</span>
-							<select aria-label={t("shell.folderFilter", { defaultValue: "Folder" })} className="h-7 rounded-md border border-border bg-background px-2 text-foreground" value={folderFilter} onChange={(event) => setFolderFilter(event.target.value)}>
-								<option value="all">{t("shell.allFolders", { defaultValue: "All folders" })}</option>
-								<option value="__workspace_wide__">{t("shell.workspaceWide", { defaultValue: "Workspace-wide" })}</option>
-								{projectId
-									? folderRepos.map((repo) => <option key={repo.relativePath} value={repo.relativePath}>{repo.name}</option>)
-									: globalFolderOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-							</select>
-						</label> : null}
 					<SessionsBoardGridView
 						columns={columns}
+						columnCountOverride={(col) => (col === "backlog" ? backlogItems.length : undefined)}
+						columnHeaderAction={(col) =>
+							col.column === "backlog" && !guest && !hostId ? (
+								<Button
+									aria-label={t("backlog.addAria")}
+									className="h-6 gap-1 px-1.5 text-2xs"
+									data-testid="backlog-add-button"
+									onClick={() => setAddBacklogOpen(true)}
+									size="none"
+									type="button"
+									variant="quiet"
+								>
+									<Plus className="size-3" aria-hidden="true" />
+									{t("backlog.add")}
+								</Button>
+							) : null
+						}
 						key={scopeKey}
 						labels={boardLabels}
+						renderColumnContent={(col) => {
+							if (col.column !== "backlog") return undefined;
+							if (backlogItems.length === 0) {
+								return (
+									<div
+										className="rounded-lg border border-dashed border-border px-3 py-4 text-xs leading-relaxed text-muted-foreground"
+										data-testid="backlog-empty-hint"
+									>
+										{t("backlog.emptyColumn")}
+									</div>
+								);
+							}
+							return backlogItems.map((item) => (
+								<button
+									key={item.id}
+									className="group flex w-full cursor-pointer flex-col gap-1.5 rounded-lg border border-border bg-surface px-3.5 py-2.5 text-left transition-[background-color,box-shadow] duration-[120ms] ease-out hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+									data-backlog-id={item.id}
+									data-testid="backlog-item-card"
+									onClick={() => {
+										setSelectedBacklogItem(item);
+										setBacklogDetailOpen(true);
+									}}
+									type="button"
+								>
+									<div className="flex items-start justify-between gap-2">
+										<span className="line-clamp-2 text-sm-md font-semibold leading-tight tracking-tight text-foreground">
+											{item.title}
+										</span>
+										<span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-2xs font-medium text-muted-foreground">
+											{item.status === "implemented" ? t("backlog.statusImplemented") : t("backlog.statusOpen")}
+										</span>
+									</div>
+									{item.summary ? (
+										<p className="line-clamp-3 text-xs leading-relaxed text-muted-foreground">
+											{item.summary}
+										</p>
+									) : null}
+									<div className="flex items-center justify-between gap-2 text-2xs text-muted-foreground/80">
+										<span className="truncate">
+											{!projectId ? (projectNamesById.get(item.projectId) ?? item.projectId) : ""}
+										</span>
+										<span className="tabular-nums">{formatTimeCompact(item.updatedAt)}</span>
+									</div>
+								</button>
+							));
+						}}
 						renderSessionCard={(session) => (
 							<BoardSessionCardAdapter
 								participants={participantsBySession.get(session.id)}
@@ -390,140 +488,99 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 								onOpenArtifacts={() => openSessionArtifacts(session)}
 								onTerminate={!hostId || connected ? ({ deleteArtifacts }) => terminateSession.mutate({ ...session, deleteArtifacts }) : undefined}
 								session={session}
-								repos={all.find((candidate) => candidate.id === session.workspaceId)?.workspaceRepos ?? folderRepos}
 							/>
 						)}
 						sessions={boardSessions}
 					/>
-					</div>
 				)}
 			</div>
 
 			{hasArchive ? (
-				<BoardArchivePanel
-					activeScopeRef={activeScopeRef}
-					hostId={hostId}
-					scopeKey={scopeKey}
-					connected={!hostId || connected}
-					sessions={archived}
-				/>
+				// Even 4px gap to the divider and the panel's bottom and left edges; the
+				// 30px button puts its text on the same line as the sidebar's Sign in.
+				<div className="flex shrink-0 items-center border-t border-border p-1">
+					<Button
+						aria-haspopup="dialog"
+						aria-label={t("shell.archivedSessionsAria", { count: archivedCount })}
+						data-testid="board-archive-button"
+						// The shell's archive modal, the same one the sidebar and Cmd+K open.
+						onClick={(event) => useUiStore.getState().openArchive({ projectId, hostId, returnFocus: event.currentTarget })}
+						// The xs button at 30px (no Button size is 30).
+						className="h-7.5 gap-1 px-2 text-xs"
+						size="none"
+						type="button"
+						variant="quiet"
+					>
+						<Archive className="size-icon-sm" aria-hidden="true" />
+						{t("shell.archivedSessions")}
+						<span className="tabular-nums text-passive">{archivedCount}</span>
+					</Button>
+				</div>
 			) : null}
 			{showStartup ? <DaemonStartupLoader /> : null}
+			{!hostId ? (
+				<KanbanCustomizeDialog
+					hostId={hostId}
+					onOpenChange={setCustomizeOpen}
+					open={customizeOpen}
+					settings={kanbanSettings}
+				/>
+			) : null}
+			{!hostId ? (
+				<AddBacklogItemDialog
+					defaultProjectId={projectId}
+					onOpenChange={setAddBacklogOpen}
+					open={addBacklogOpen}
+					orchestratorSessionId={orchestrator?.id}
+					projects={workspaces.map((candidate) => ({ id: candidate.id, name: candidate.name }))}
+				/>
+			) : null}
+			{!hostId ? (
+				<BacklogItemDetailDialog
+					canImplement={!guest}
+					item={selectedBacklogItem}
+					onOpenChange={setBacklogDetailOpen}
+					onOpenSession={(targetProjectId, sessionId) => {
+						void navigate(sessionNavigateTarget(targetProjectId, sessionId, hostId));
+					}}
+					open={backlogDetailOpen}
+					projectName={selectedBacklogItem ? projectNamesById.get(selectedBacklogItem.projectId) : undefined}
+				/>
+			) : null}
 		</div>
 	);
 }
 
-/**
- * Restore state lives here so expand/collapse in SessionsArchiveView does not
- * re-render the kanban columns. In-flight restores are invalidated on project
- * change or unmount so completion cannot navigate after the user left.
- */
-const BoardArchivePanel = memo(function BoardArchivePanel({
-	activeScopeRef,
-	hostId,
-	scopeKey,
-	connected,
-	sessions,
-}: {
-	activeScopeRef: React.MutableRefObject<string>;
-	hostId?: string;
-	scopeKey: string;
-	connected: boolean;
-	sessions: WorkspaceSession[];
-}) {
+function hostOfflineReasonKey(host: RemoteHost | undefined) {
+	return host?.failureReason === "unauthorized" ? "remote.hostUnauthorized" as const
+		: host?.failureReason === "incompatible" ? "remote.hostIncompatible" as const
+		: "remote.hostOffline" as const;
+}
+
+function HostOfflineStatus({ host, label, updatedAt }: { host: RemoteHost | undefined; label: string; updatedAt?: number }) {
 	const { t } = useTranslation();
-	const navigate = useNavigate();
-	const queryClient = useQueryClient();
-	const restoreSessionById = useRestoreSession();
-	const [restoringSessionId, setRestoringSessionId] = useState<string | undefined>();
-	const [restoreErrors, setRestoreErrors] = useState<Record<string, string>>({});
-	const [restoreUnavailableSession, setRestoreUnavailableSession] = useState<WorkspaceSession | undefined>();
-	const restoreGenerationRef = useRef(0);
-
-	useEffect(() => {
-		setRestoringSessionId(undefined);
-		setRestoreErrors({});
-		setRestoreUnavailableSession(undefined);
-		restoreGenerationRef.current += 1;
-	}, [scopeKey]);
-
-	useEffect(() => {
-		const generation = restoreGenerationRef.current;
-		return () => {
-			// Invalidate in-flight restores if this panel unmounts (e.g. project with
-			// no archive) so completion cannot navigate after the user left.
-			if (restoreGenerationRef.current === generation) {
-				restoreGenerationRef.current += 1;
-			}
-		};
-	}, []);
-
-	const restoreArchivedSession = async (event: MouseEvent<HTMLButtonElement>, session: WorkspaceSession) => {
-		event.stopPropagation();
-		if (restoringSessionId) return;
-		const restoreScopeKey = scopeKey;
-		const generation = restoreGenerationRef.current;
-		const isStillActiveProject = () =>
-			generation === restoreGenerationRef.current &&
-			activeScopeRef.current === restoreScopeKey;
-		setRestoringSessionId(session.id);
-		setRestoreErrors((current) => {
-			const next = { ...current };
-			delete next[session.id];
-			return next;
-		});
-		try {
-			const result = await restoreSessionById(session.id, hostId);
-			if (!isStillActiveProject()) return;
-			if (result.status === "success") {
-				void navigate(sessionNavigateTarget(session.workspaceId, session.id, hostId));
-				return;
-			}
-			if (result.status === "not_resumable") {
-				setRestoreUnavailableSession(session);
-				return;
-			}
-			setRestoreErrors((current) => ({ ...current, [session.id]: result.message }));
-		} finally {
-			if (isStillActiveProject()) {
-				setRestoringSessionId(undefined);
-			}
-		}
-	};
-
+	const shell = useShellMaybe();
+	const action = host?.status === "connecting"
+		? <Button type="button" size="sm" variant="secondary" disabled>{t("terminal.connecting")}</Button>
+		: host?.failureReason === "unauthorized"
+			? <Button type="button" size="sm" variant="secondary" onClick={() => useUiStore.getState().openGlobalSettings("remoteHosts", { preserveProject: true })}>{t("remote.editHost", { label })}</Button>
+			: <Button type="button" size="sm" variant="secondary" aria-label={t("remote.retryHost", { label })} disabled={!shell?.retryRemoteHosts} onClick={() => shell?.retryRemoteHosts?.()}>
+				<RotateCw className="size-3.5" aria-hidden="true" />
+				{t("remote.retry")}
+			</Button>;
 	return (
-		<>
-			<SessionsArchiveView
-				labels={{
-					archive: t("shell.archive"),
-					archiveAria: t("shell.archiveSessionsAria", { count: sessions.length }),
-					archivedSessions: t("shell.archivedSessions"),
-				}}
-				renderSessionCard={(session) => (
-					<ArchivedSessionCardAdapter
-						isRestoreDisabled={!connected || restoringSessionId !== undefined}
-						isRestoring={restoringSessionId === session.id}
-						restoreAction={(event) => void restoreArchivedSession(event, session)}
-						restoreError={restoreErrors[session.id]}
-						session={session}
-					/>
-				)}
-				resetKey={scopeKey}
-				sessions={sessions}
-			/>
-			{restoreUnavailableSession ? (
-				<RestoreUnavailableDialog
-					open={true}
-					session={restoreUnavailableSession}
-					hostId={hostId}
-					onOpenChange={(open) => {
-						if (!open) setRestoreUnavailableSession(undefined);
-					}}
-					onRecreated={async () => {
-						await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
-					}}
-				/>
-			) : null}
-		</>
+		<div className="flex min-w-0 items-center gap-2 text-xs" data-testid="board-host-offline" role="status" style={noDragStyle}>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<span className="inline-flex shrink-0 items-center gap-1.5 text-warning" tabIndex={0}>
+						<WifiOff className="size-icon-sm" aria-hidden="true" />
+						{t("remote.offline")}
+					</span>
+				</TooltipTrigger>
+				<TooltipContent className="max-w-72">{t(hostOfflineReasonKey(host))}{updatedAt ? ` ${t("remote.offlineCopy")}` : ""}</TooltipContent>
+			</Tooltip>
+			{updatedAt ? <span className="truncate text-muted-foreground">· {t("shell.updatedAt", { time: formatTimeCompact(new Date(updatedAt).toISOString()) })}</span> : null}
+			{action}
+		</div>
 	);
-});
+}

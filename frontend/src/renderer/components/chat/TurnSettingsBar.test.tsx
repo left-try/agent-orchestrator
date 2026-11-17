@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatConfigOption } from "../../types/conversation";
@@ -879,6 +879,29 @@ describe("ACP session config options", () => {
 		expect(screen.getByRole("menuitemradio", { name: /Use agent permissions/ })).toHaveAttribute("aria-checked", "true");
 	});
 
+	// A Cloud chat keeps its approval mode unless the change is marked as a pick
+	// from this menu, so the unified bar's rows must mark it like the plain rows do.
+	it("reports a pick from the unified bar's approval menu as an approval pick", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(
+			<TurnSettingsBar
+				harness="claude-code"
+				models={[]}
+				settings={{ model: "sonnet", approvalMode: "bypass-permissions" }}
+				onChange={onChange}
+				agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		await user.click(screen.getByRole("menuitemradio", { name: /Accept edits/ }));
+		expect(onChange).toHaveBeenLastCalledWith({ model: "sonnet", approvalMode: "accept-edits" }, "approvalMode");
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		await user.keyboard("{Home}{Enter}");
+		expect(onChange).toHaveBeenLastCalledWith({ model: "sonnet", approvalMode: "default" }, "approvalMode");
+	});
+
 	it("passes a model's note, such as the orchestrator's model, to the agent picker", () => {
 		render(
 			<TurnSettingsBar
@@ -913,7 +936,8 @@ describe("ACP session config options", () => {
 		expect(agentPicker.current?.models.find((model) => model.id === "opus")?.hint).toBe("Same as orchestrator");
 	});
 
-	it("keeps Cloud model and effort choices without a per-turn permission picker", () => {		render(
+	it("offers Codex's configured default without a per-turn permission picker", () => {
+		render(
 			<TurnSettingsBar
 				harness="codex"
 				models={[{ id: "codex-test", displayName: "Codex Test", default: true, efforts: ["low", "high"] }]}
@@ -922,7 +946,7 @@ describe("ACP session config options", () => {
 				showApprovalMode={false}
 			/>,
 		);
-		expect(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" })).toHaveTextContent("Codex Test");
+		expect(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" })).toHaveTextContent("Auto");
 		expect(screen.queryByRole("button", { name: "Approval policy for the next turn" })).not.toBeInTheDocument();
 	});
 
@@ -965,6 +989,25 @@ describe("ACP session config options", () => {
 		expect(screen.getByRole("button", { name: "Approval policy for the next turn" })).toHaveTextContent(
 			"Full access",
 		);
+	});
+
+	it("lets Codex use its thread default from the per-turn model menu", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(
+			<TurnSettingsBar
+				harness="codex"
+				models={[{ id: "codex-test", displayName: "Codex Test", default: true, efforts: ["low", "high"] }]}
+				settings={{ model: "other-model", reasoningEffort: "high" }}
+				onChange={onChange}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" }));
+		await user.click(screen.getByRole("menuitem", { name: "Model" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "Auto" }));
+
+		expect(onChange).toHaveBeenCalledWith({ model: undefined, reasoningEffort: undefined });
 	});
 
 	it("labels bypass permission policy plainly", () => {
@@ -1105,6 +1148,31 @@ describe("remember project permissions", () => {
 		rerender(<TurnSettingsBar {...props} rememberPermissionsError="Could not save project default" />);
 		expect(screen.getByRole("alert")).toHaveTextContent("Could not save project default");
 		expect(screen.getByRole("button", { name: "Approval policy for the next turn" })).toBeEnabled();
+	});
+
+	it("shows a settings error inside the picker row, so the composer does not grow", async () => {
+		const message = "the agent rejected that model because the account cannot use it";
+		const props = { models: [], settings: {}, onChange: vi.fn() };
+		const { rerender } = render(<TurnSettingsBar {...props} />);
+		const bar = screen.getByRole("group", { name: "Turn settings" });
+		const row = bar.firstElementChild as HTMLElement;
+		expect(bar.children).toHaveLength(1);
+		expect(row).toHaveClass("h-7");
+		expect(row).toContainElement(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+
+		rerender(<TurnSettingsBar {...props} error={message} rememberPermissionsError="Could not save project default" />);
+		const alert = screen.getByRole("alert");
+		expect(row).toContainElement(alert);
+		// The row stays the only child of the bar: nothing is stacked under it.
+		expect(bar.children).toHaveLength(1);
+		expect(alert).toHaveTextContent(message);
+		expect(alert).toHaveTextContent("Could not save project default");
+		// However narrow the row, the warning icon keeps its room.
+		expect(alert).toHaveClass("min-w-3.5");
+		// The line truncates to the free space; keyboard focus opens the whole message.
+		expect(alert).toHaveAttribute("tabindex", "0");
+		act(() => alert.focus());
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(`${message} · Could not save project default`);
 	});
 
 	it("matches the remembered mode against the provider mode instead of stale native settings", async () => {
@@ -1876,7 +1944,8 @@ it("presents Antigravity model variants as Codex-style model and effort choices 
 		{ id: "mode", name: "Session Mode", category: "mode", type: "select", currentValue: "auto_edit", choices: [
 			{ value: "default", name: "Use agent permissions", permissionMode: "default" },
 			{ value: "auto_edit", name: "Accept edits", permissionMode: "accept-edits" },
-			{ value: "yolo", name: "Auto-approve", permissionMode: "auto" },
+			{ value: "auto", name: "Auto", permissionMode: "auto" },
+			{ value: "yolo", name: "Bypass permissions", permissionMode: "bypass-permissions" },
 			{ value: "agent", name: "Agent Mode" },
 		] },
 	];
@@ -1900,6 +1969,9 @@ it("presents Antigravity model variants as Codex-style model and effort choices 
 	expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "default" });
 	await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
 	await user.click(screen.getByRole("menuitemradio", { name: "Auto-approve" }));
+	expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "auto" });
+	await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+	await user.click(screen.getByRole("menuitemradio", { name: "Bypass permissions" }));
 	expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "yolo" });
 	expect(options[0].choices).toHaveLength(4);
 });

@@ -596,6 +596,7 @@ func TestSpawnStandaloneRejectsProjectOnlyOptions(t *testing.T) {
 	}{
 		{name: "project", args: []string{"--project", "demo"}},
 		{name: "branch", args: []string{"--branch", "feature/x"}},
+		{name: "base", args: []string{"--base", "feature/parent"}},
 		{name: "issue", args: []string{"--issue", "42"}},
 		{name: "claim pr", args: []string{"--claim-pr", "42"}},
 		{name: "orchestrator", args: []string{"--kind", "orchestrator"}},
@@ -618,6 +619,7 @@ func TestSpawnScratchRejectsGitOnlyFlags(t *testing.T) {
 		wantErr string
 	}{
 		{name: "branch", args: []string{"spawn", "--project", "scratch", "--agent", "codex", "--name", "Scratch Task", "--branch", "feature/x"}, wantErr: "scratch projects do not support --branch"},
+		{name: "base", args: []string{"spawn", "--project", "scratch", "--agent", "codex", "--name", "Scratch Task", "--base", "feature/parent"}, wantErr: "scratch projects do not support --base"},
 		{name: "claim pr", args: []string{"spawn", "--project", "scratch", "--agent", "codex", "--name", "Scratch Task", "--claim-pr", "142"}, wantErr: "scratch projects do not support --claim-pr"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1247,5 +1249,32 @@ func TestSpawnReportsBackgroundStartFailure(t *testing.T) {
 	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "worker", "--prompt", "fix it")
 	if err == nil || !strings.Contains(err.Error(), "session demo-9 failed to start: git worktree add failed") {
 		t.Fatalf("err = %v, want the start failure reason", err)
+	}
+}
+
+func TestSpawnWorkspaceFolder(t *testing.T) {
+	cfg := setConfigEnv(t)
+	spawnStartPollInterval = time.Millisecond
+	t.Cleanup(func() { spawnStartPollInterval = 500 * time.Millisecond })
+
+	// Standalone rejects --folder
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--standalone", "--agent", "codex", "--name", "test-worker", "--folder", "sub-repo", "--prompt", "test")
+	if err == nil || !strings.Contains(err.Error(), "standalone sessions do not support --branch, --base, --issue, --claim-pr, or --folder") {
+		t.Fatalf("expected standalone folder error, got: %v", err)
+	}
+
+	// Normal project sends workspaceFolder in body
+	var requests []string
+	var body map[string]any
+	srv := spawnStartServer(t, []string{"ready"}, &requests, &body)
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err = executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "worker", "--folder", "services/api", "--prompt", "fix api")
+	if err != nil {
+		t.Fatalf("spawn with --folder failed: %v", err)
+	}
+	if body["workspaceFolder"] != "services/api" {
+		t.Fatalf("expected workspaceFolder 'services/api', got: %v", body["workspaceFolder"])
 	}
 }

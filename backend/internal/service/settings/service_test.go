@@ -28,6 +28,12 @@ func (*hibernationSettingsStore) SetComputerUse(context.Context, bool, time.Time
 func (*hibernationSettingsStore) SetSessionRetentionDays(context.Context, int, time.Time) error {
 	return nil
 }
+func (*hibernationSettingsStore) SetAccountHandoff(context.Context, bool, time.Time) error {
+	return nil
+}
+func (*hibernationSettingsStore) SetKanbanSettings(context.Context, domain.KanbanSettings, time.Time) error {
+	return nil
+}
 
 func TestChatHibernationGateResetsOnDaemonBoot(t *testing.T) {
 	ctx := context.Background()
@@ -226,5 +232,85 @@ func TestSessionRetentionDays(t *testing.T) {
 		if snapshot, err := svc.SetSessionRetentionDays(ctx, days); err != nil || snapshot.SessionRetentionDays != days {
 			t.Fatalf("days=%d: snapshot=%+v err=%v", days, snapshot, err)
 		}
+	}
+}
+
+type kanbanSettingsStore struct {
+	hibernationSettingsStore
+	kanban domain.KanbanSettings
+}
+
+func (s *kanbanSettingsStore) GetAppSettings(context.Context) (Snapshot, error) {
+	return Snapshot{Kanban: s.kanban}, nil
+}
+
+func (s *kanbanSettingsStore) SetKanbanSettings(_ context.Context, settings domain.KanbanSettings, _ time.Time) error {
+	s.kanban = settings
+	return nil
+}
+
+func TestKanbanSettings(t *testing.T) {
+	ctx := context.Background()
+	store := &kanbanSettingsStore{}
+	svc := New(store, nil, Offering{}, nil)
+
+	got, err := svc.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Kanban.MoveMergedToDone {
+		t.Fatal("default MoveMergedToDone should be true")
+	}
+	for _, col := range got.Kanban.Columns {
+		if col.ID == string(domain.KanbanBacklog) && col.Enabled {
+			t.Fatal("default backlog column should be disabled")
+		}
+	}
+
+	var apiErr *apierr.Error
+	_, err = svc.SetKanbanSettings(ctx, domain.KanbanSettings{
+		MoveMergedToDone: true,
+		Columns: []domain.KanbanColumnPreference{
+			{ID: "backlog", Enabled: false},
+		},
+	})
+	if !errors.As(err, &apiErr) || apiErr.Code != "KANBAN_SETTINGS_INVALID" {
+		// Because missing columns default to enabled, pass all disabled to trigger error.
+		_, err = svc.SetKanbanSettings(ctx, domain.KanbanSettings{
+			MoveMergedToDone: false,
+			Columns: []domain.KanbanColumnPreference{
+				{ID: "backlog", Enabled: false},
+				{ID: "building", Enabled: false},
+				{ID: "validating", Enabled: false},
+				{ID: "needs_review", Enabled: false},
+				{ID: "ready", Enabled: false},
+				{ID: "done", Enabled: false},
+			},
+		})
+	}
+	if !errors.As(err, &apiErr) || apiErr.Code != "KANBAN_SETTINGS_INVALID" {
+		t.Fatalf("all-disabled err = %v, want KANBAN_SETTINGS_INVALID", err)
+	}
+
+	custom := domain.KanbanSettings{
+		MoveMergedToDone: false,
+		Columns: []domain.KanbanColumnPreference{
+			{ID: "backlog", Enabled: true, Label: "Ideas"},
+			{ID: "building", Enabled: true},
+			{ID: "validating", Enabled: false},
+			{ID: "needs_review", Enabled: true},
+			{ID: "ready", Enabled: true},
+			{ID: "done", Enabled: false},
+		},
+	}
+	updated, err := svc.SetKanbanSettings(ctx, custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Kanban.MoveMergedToDone {
+		t.Fatal("expected MoveMergedToDone to be false after update")
+	}
+	if updated.Kanban.Columns[0].ID != "backlog" || !updated.Kanban.Columns[0].Enabled || updated.Kanban.Columns[0].Label != "Ideas" {
+		t.Fatalf("unexpected updated backlog column: %+v", updated.Kanban.Columns[0])
 	}
 }

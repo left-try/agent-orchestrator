@@ -41,6 +41,7 @@ export function TaskEffortPicker({
 }
 
 export function TaskModelPicker({
+	hostId,
 	agentId,
 	agentLabel,
 	catalog,
@@ -52,13 +53,19 @@ export function TaskModelPicker({
 	onRefresh,
 	showFollowAgentAction,
 	allowNativeSelection = false,
+	allowConfiguredDefault = false,
+	configuredDefaultLabel,
 	footer,
 	modelHint,
 }: TaskComposerModelControl & {
 	onRefresh?: () => Promise<void>;
 	showFollowAgentAction: boolean;
+	hostId?: string;
 	/** Offer the native default as a choice and any model ID, as a cloud task can run them. */
 	allowNativeSelection?: boolean;
+	/** Offer Codex's configured default without adding a synthetic model ID. */
+	allowConfiguredDefault?: boolean;
+	configuredDefaultLabel?: string;
 	/** Where the listed models come from. */
 	footer?: ReactNode;
 	/** A quiet note beside one model's name, such as the one the orchestrator runs. */
@@ -103,6 +110,7 @@ export function TaskModelPicker({
 
 	return (
 		<AgentModelCombobox
+			hostId={hostId}
 			key={agentId}
 			aria-label={t("newTask.model")}
 			value={value}
@@ -110,9 +118,10 @@ export function TaskModelPicker({
 			allowCustom={allowNativeSelection && catalog?.allowCustom}
 			customModelEntry={allowNativeSelection ? catalog?.customModelEntry : catalog?.customModelEntry === "configured" ? "configured" : "none"}
 			onCustom={allowNativeSelection ? onModelChange : undefined}
-			// Default sends no model, so the project's or the agent's own applies.
-			onUseDefault={allowNativeSelection ? () => onModelChange("") : undefined}
-			emptyLabel={allowNativeSelection ? t("newTask.cloudConfiguredDefault") : undefined}
+			// An omitted model lets Codex use its configured default. Cloud keeps its project/agent wording.
+			onUseDefault={allowNativeSelection || allowConfiguredDefault ? () => onModelChange("") : undefined}
+			defaultChoiceLabel={configuredDefaultLabel}
+			emptyLabel={allowConfiguredDefault ? configuredDefaultLabel : allowNativeSelection ? t("newTask.cloudConfiguredDefault") : undefined}
 			footer={footer}
 			modelHint={modelHint}
 			agentLabel={agentLabel}

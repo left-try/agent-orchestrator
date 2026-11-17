@@ -35,6 +35,7 @@ import { cn } from "../../lib/utils";
 import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } from "../settings/EffortPicker";
 import { agentModelDisplayLabel, claudeChoiceModel, isDefaultPlaceholderLabel, splitClaudeModels } from "../../lib/agent-model-choices";
 import { Switch } from "../ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { agentLabel } from "../../lib/agent-options";
 import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
@@ -67,7 +68,7 @@ const APPROVAL_ORDER: ApprovalMode[] = [
 const AGY_APPROVAL_COPY: Record<ApprovalMode, { label: string; description?: string }> = {
 	...APPROVAL_COPY,
 	default: { label: "Ask for approval" },
-	"bypass-permissions": { label: "Auto-approve" },
+	"bypass-permissions": { label: "Bypass permissions" },
 };
 
 // Hermes' default mode governs only its file-edit tool; ordinary shell commands
@@ -223,8 +224,9 @@ export function TurnSettingsBar({
 	const fallback = settings.model ? undefined : displayModels.find((model) => model.default);
 	// A catalog miss must not relabel an explicit choice or borrow another model's
 	// effort settings. Custom or newly available models may not be listed yet.
-	const chosenLabel =
-		selected?.displayName ?? settings.model ?? fallback?.displayName ?? unsetModelLabel ?? "Choose a model";
+	const chosenLabel = harness === "codex" && !settings.model
+		? t("settings.models.autoRouteLabel")
+		: selected?.displayName ?? settings.model ?? fallback?.displayName ?? unsetModelLabel ?? "Choose a model";
 	const rerouted = reroute
 		? displayModels.find((model) => model.id === reroute.toModel)?.displayName ?? reroute.toModel
 		: undefined;
@@ -248,11 +250,15 @@ export function TurnSettingsBar({
 	const approvalNote = approvalModeLimits?.requested
 		? `${approvalCopy[approvalModeLimits.requested].label} isn't available for ${approvalModeLimits.model}; using ${approvalLabel}.`
 		: undefined;
+	// Every row of the approval menu reports its pick as one: a Cloud chat keeps
+	// its approval mode unless the change says it came from this menu.
+	const pickApprovalMode = (mode: ApprovalMode) => onChange?.({ ...settings, approvalMode: mode }, "approvalMode");
 	const modelGroupLabel = effortLabel
 		? `${modelLabel} ${formatEffortLabel(effortLabel, t)}`
 		: modelLabel;
 	const grouped = partitionConfigOptions(displayConfigOptions, harness !== "agy");
 	const optionDisabled = Boolean(disabled || configPending || rememberPermissionsPending);
+	const settingsProblem = [error, rememberPermissionsError].filter(Boolean).join(" · ") || undefined;
 	const applyOption = (optionId: string, value: ChatConfigOptionValue) => {
 		if (!onChangeConfigOption) return;
 		const providerId = harness === "agy" && optionId === AGY_MODEL_EFFORT
@@ -545,6 +551,22 @@ export function TurnSettingsBar({
 							onChange={applyOption}
 						/>
 					) : null}
+
+					{/* In the row's free space beside the pickers, so an error never makes the composer taller.
+					    The icon always keeps its room, and the whole message opens on hover or keyboard focus. */}
+					{settingsProblem ? (
+						<TooltipProvider>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<p role="alert" tabIndex={0} className="ml-1 flex min-w-3.5 flex-1 cursor-default items-center gap-1.5 overflow-hidden text-xs text-destructive">
+										<TriangleAlert aria-hidden="true" className="size-3.5 shrink-0" />
+										<span className="min-w-0 truncate">{settingsProblem}</span>
+									</p>
+								</TooltipTrigger>
+								<TooltipContent side="top" className="max-w-80">{settingsProblem}</TooltipContent>
+							</Tooltip>
+						</TooltipProvider>
+					) : null}
 				</div>
 
 				{showRightDropdown || children || (unified && planOn) ? (
@@ -607,7 +629,7 @@ export function TurnSettingsBar({
 											description={approvalUnavailable(mode) ?? approvalCopy[mode].description}
 											active={mode === (settings.approvalMode ?? "default")}
 											disabled={Boolean(approvalUnavailable(mode))}
-											onSelect={() => onChange({ ...settings, approvalMode: mode })}
+											onSelect={() => pickApprovalMode(mode)}
 										/>
 									) : (
 									<OptionMenuItem
@@ -615,7 +637,7 @@ export function TurnSettingsBar({
 										active={mode === (settings.approvalMode ?? "default")}
 										radio
 										disabled={Boolean(approvalUnavailable(mode))}
-										onSelect={() => onChange({ ...settings, approvalMode: mode }, "approvalMode")}
+										onSelect={() => pickApprovalMode(mode)}
 										className={cn("text-xs")}
 									>
 										<span
@@ -656,14 +678,6 @@ export function TurnSettingsBar({
 					</div>
 				) : null}
 			</div>
-			{rememberPermissionsError ? (
-				<p role="alert" className="px-1 text-xs text-destructive">{rememberPermissionsError}</p>
-			) : null}
-			{error ? (
-				<p role="alert" className="px-1 text-xs leading-snug text-destructive">
-					{error}
-				</p>
-			) : null}
 		</div>
 	);
 }
@@ -814,20 +828,34 @@ function ModelEffortPicker({
 					    events do not reliably reach an outer overflow on nested submenus. */}
 					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
 						<ModelMenuChoices models={catalog} selectedId={settings.model}>
-							{(matches, searchActiveID, optionID) => matches.map((model) => (
-								<OptionMenuItem
-									key={model.id}
-									id={optionID?.(model.id)}
-									active={model.id === settings.model}
-									searchActive={model.id === searchActiveID}
-									radio
-									disabled={Boolean(model.unavailableReason)}
-									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
-									className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
-								>
-									<UnavailableLabel label={model.displayName} reason={model.unavailableReason} />
-								</OptionMenuItem>
-							))}
+							{(matches, searchActiveID, optionID, query) => <>
+								{harness === "codex" && !query ? (
+									<OptionMenuItem
+										key="codex-configured-default"
+										active={!settings.model}
+										radio
+										title="Use Codex's configured default model for this thread"
+										onSelect={() => onChange({ ...settings, model: undefined, reasoningEffort: undefined })}
+										className={cn("text-xs", !settings.model ? "text-foreground" : "text-muted-foreground")}
+									>
+										{t("settings.models.autoRouteLabel")}
+									</OptionMenuItem>
+								) : null}
+								{matches.map((model) => (
+									<OptionMenuItem
+										key={model.id}
+										id={optionID?.(model.id)}
+										active={model.id === settings.model}
+										searchActive={model.id === searchActiveID}
+										radio
+										disabled={Boolean(model.unavailableReason)}
+										onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
+										className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
+									>
+										<UnavailableLabel label={model.displayName} reason={model.unavailableReason} />
+									</OptionMenuItem>
+								))}
+							</>}
 						</ModelMenuChoices>
 					</OptionMenuSubContent>
 				</OptionMenuSub>

@@ -36,7 +36,7 @@ func TestIdleReviewerHibernatesAndResumesSameConversation(t *testing.T) {
 	if _, err := svc.SendForOwner(ctx, owner, ports.ChatUserMessage{Text: "review this", ClientMessageID: "initial"}); err != nil {
 		t.Fatal(err)
 	}
-	clock.Add(int64(2 * time.Minute))
+	clock.Add(int64(chatsvc.IdleBeforeHibernate + time.Minute))
 	if slept, err := svc.HibernateIdleReviewer(ctx, owner.ID); err != nil || slept {
 		t.Fatalf("active reviewer hibernated: %v, %v", slept, err)
 	}
@@ -48,7 +48,7 @@ func TestIdleReviewerHibernatesAndResumesSameConversation(t *testing.T) {
 	awaitStoreSnapshot(t, st, conversation.ID, func(s store.ConversationSnapshot) bool {
 		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateCompleted
 	})
-	clock.Add(int64(2 * time.Minute))
+	clock.Add(int64(chatsvc.IdleBeforeHibernate + time.Minute))
 	if err := st.InsertReviewRun(ctx, domain.ReviewRun{ID: "active-run", ReviewID: owner.ID, SessionID: testSession, Harness: domain.ReviewerCodex, PRURL: "https://example.test/pr/1", TargetSHA: "head", Status: domain.ReviewRunRunning, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}

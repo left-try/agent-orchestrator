@@ -154,70 +154,155 @@ func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
 }
 
 func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.ProjectID) error {
-	target, ok, err := c.activeOrchestrator(ctx, projectID)
+	orchestrators, err := c.activeOrchestratorsByFolder(ctx, projectID)
 	if err != nil {
 		return err
 	}
-	if !ok {
+	if len(orchestrators) == 0 {
 		return fmt.Errorf("project %s has no active orchestrator", projectID)
 	}
 	batch, err := c.claim(ctx, projectID)
 	if err != nil || len(batch.Reports) == 0 {
 		return err
 	}
-	// Terminal orchestrators queue typed input during a turn, and a Ctrl-C
-	// there cancels the running turn or a prompt that was just submitted, so
-	// stuck reports are delivered to them like any other report.
-	if batch.hasState(domain.ReportStuck) && domain.NormalizeSessionMode(target.Mode) == domain.SessionModeChat {
-		interrupted := false
-		var nextInterrupt time.Time
-		for _, worker := range batch.stuckWorkers() {
-			acquired, next, acquireErr := c.store.AcquireReportInterrupt(ctx, worker, c.now().UTC(), ReportInterruptWindow)
-			if acquireErr != nil {
-				return c.release(ctx, batch, acquireErr)
-			}
-			if acquired {
-				interrupted = true
-				if interruptErr := c.delivery.Interrupt(ctx, target.ID); interruptErr != nil {
-					return c.release(ctx, batch, interruptErr)
-				}
-			} else if nextInterrupt.IsZero() || next.Before(nextInterrupt) {
-				nextInterrupt = next
-			}
-		}
-		if !interrupted && !batch.hasState(domain.ReportNeedsInput) {
-			_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, nextInterrupt, "repeated stuck report coalesced inside interrupt window")
-			return deferErr
-		}
+	// Resolve each report's target orchestrator (exact folder match, or main
+	// orchestrator with empty workspace folder as fallback). Group preserves order.
+	groups, missingFolder, err := c.groupBatchByTarget(ctx, batch, orchestrators)
+	if err != nil {
+		return c.release(ctx, batch, err)
 	}
-	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
-		if errors.Is(err, ErrOrchestratorBusy) {
-			// Released, the batch would stay the earliest due and every retry would
-			// stop RunDue before any other project's reports. Back off instead.
-			_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(OrchestratorBusyRetry), err.Error())
-			return deferErr
+	if missingFolder {
+		return c.retryLater(ctx, batch, fmt.Errorf("project %s has no active orchestrator", projectID))
+	}
+	for idx, group := range groups {
+		target := group.target
+		subBatch := group.batch
+		idempotencyKey := subBatch.IdempotencyKey()
+		if len(groups) > 1 {
+			idempotencyKey = fmt.Sprintf("%s:%d:%s", idempotencyKey, idx, target.ID)
 		}
-		return c.retryLater(ctx, batch, err)
+		// Terminal orchestrators queue typed input during a turn, and a Ctrl-C
+		// there cancels the running turn or a prompt that was just submitted, so
+		// stuck reports are delivered to them like any other report.
+		if subBatch.hasState(domain.ReportStuck) && domain.NormalizeSessionMode(target.Mode) == domain.SessionModeChat {
+			interrupted := false
+			var nextInterrupt time.Time
+			for _, worker := range subBatch.stuckWorkers() {
+				acquired, next, acquireErr := c.store.AcquireReportInterrupt(ctx, worker, c.now().UTC(), ReportInterruptWindow)
+				if acquireErr != nil {
+					return c.release(ctx, batch, acquireErr)
+				}
+				if acquired {
+					interrupted = true
+					if interruptErr := c.delivery.Interrupt(ctx, target.ID); interruptErr != nil {
+						return c.release(ctx, batch, interruptErr)
+					}
+				} else if nextInterrupt.IsZero() || next.Before(nextInterrupt) {
+					nextInterrupt = next
+				}
+			}
+			if !interrupted && !subBatch.hasState(domain.ReportNeedsInput) && len(groups) == 1 {
+				_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, nextInterrupt, "repeated stuck report coalesced inside interrupt window")
+				return deferErr
+			}
+			if !interrupted && !subBatch.hasState(domain.ReportNeedsInput) {
+				continue
+			}
+		}
+		if err := c.delivery.Submit(ctx, target.ID, subBatch.Render(), idempotencyKey); err != nil {
+			if errors.Is(err, ErrOrchestratorBusy) {
+				// Released, the batch would stay the earliest due and every retry would
+				// stop RunDue before any other project's reports. Back off instead.
+				_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(OrchestratorBusyRetry), err.Error())
+				return deferErr
+			}
+			return c.retryLater(ctx, batch, err)
+		}
 	}
 	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
 	return err
 }
 
-func (c *Coordinator) activeOrchestrator(ctx context.Context, projectID domain.ProjectID) (domain.SessionRecord, bool, error) {
+type targetedReportBatch struct {
+	target domain.SessionRecord
+	batch  PreparedBatch
+}
+
+func (c *Coordinator) activeOrchestratorsByFolder(ctx context.Context, projectID domain.ProjectID) (map[string]domain.SessionRecord, error) {
 	recs, err := c.store.ListSessions(ctx, projectID)
 	if err != nil {
-		return domain.SessionRecord{}, false, err
+		return nil, err
 	}
-	var selected domain.SessionRecord
+	byFolder := make(map[string]domain.SessionRecord)
 	for _, rec := range recs {
 		if rec.Kind != domain.KindOrchestrator || rec.IsTerminated || rec.Activity.State == domain.ActivityExited {
 			continue
 		}
-		if selected.ID == "" || rec.CreatedAt.After(selected.CreatedAt) {
-			selected = rec
+		folder := rec.Metadata.WorkspaceFolder
+		existing, ok := byFolder[folder]
+		if !ok || rec.CreatedAt.After(existing.CreatedAt) {
+			byFolder[folder] = rec
 		}
 	}
-	return selected, selected.ID != "", nil
+	return byFolder, nil
+}
+
+func resolveReportTargetOrchestrator(byFolder map[string]domain.SessionRecord, folder string) (domain.SessionRecord, bool) {
+	if folder != "" {
+		if orch, ok := byFolder[folder]; ok {
+			return orch, true
+		}
+	}
+	if main, ok := byFolder[""]; ok {
+		return main, true
+	}
+	return domain.SessionRecord{}, false
+}
+
+func (c *Coordinator) sessionWorkspaceFolder(ctx context.Context, id domain.SessionID) (string, error) {
+	sess, found, err := c.store.GetSession(ctx, id)
+	if err != nil || !found {
+		return "", err
+	}
+	return sess.Metadata.WorkspaceFolder, nil
+}
+
+func (c *Coordinator) groupBatchByTarget(
+	ctx context.Context,
+	batch PreparedBatch,
+	byFolder map[string]domain.SessionRecord,
+) ([]targetedReportBatch, bool, error) {
+	order := make([]domain.SessionID, 0)
+	byTarget := make(map[domain.SessionID]*targetedReportBatch)
+	for _, r := range batch.Reports {
+		folder, err := c.sessionWorkspaceFolder(ctx, r.SessionID)
+		if err != nil {
+			return nil, false, err
+		}
+		target, ok := resolveReportTargetOrchestrator(byFolder, folder)
+		if !ok {
+			return nil, true, nil
+		}
+		entry, exists := byTarget[target.ID]
+		if !exists {
+			entry = &targetedReportBatch{
+				target: target,
+				batch: PreparedBatch{
+					ProjectID: batch.ProjectID,
+					Token:     batch.Token,
+					ID:        batch.ID,
+				},
+			}
+			byTarget[target.ID] = entry
+			order = append(order, target.ID)
+		}
+		entry.batch.Reports = append(entry.batch.Reports, r)
+	}
+	out := make([]targetedReportBatch, 0, len(order))
+	for _, id := range order {
+		out = append(out, *byTarget[id])
+	}
+	return out, false, nil
 }
 
 // PreparedBatch is a token-fenced durable batch awaiting acceptance.
@@ -257,7 +342,28 @@ func (c *Coordinator) PreparePiggyback(ctx context.Context, target domain.Sessio
 	if rec.Kind != domain.KindOrchestrator || rec.IsTerminated || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
 		return PreparedBatch{}, nil
 	}
-	return c.claim(ctx, rec.ProjectID)
+	batch, err := c.claim(ctx, rec.ProjectID)
+	if err != nil || len(batch.Reports) == 0 {
+		return batch, err
+	}
+	byFolder, err := c.activeOrchestratorsByFolder(ctx, rec.ProjectID)
+	if err != nil {
+		return PreparedBatch{}, c.release(ctx, batch, err)
+	}
+	for _, r := range batch.Reports {
+		folder, folderErr := c.sessionWorkspaceFolder(ctx, r.SessionID)
+		if folderErr != nil {
+			return PreparedBatch{}, c.release(ctx, batch, folderErr)
+		}
+		resolved, found := resolveReportTargetOrchestrator(byFolder, folder)
+		if !found || resolved.ID != target {
+			// Batch includes a report routed to another folder/main orchestrator;
+			// release without error so the coordinator delivers each to its target.
+			_, releaseErr := c.store.ReleaseReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC(), "report batch spans multiple orchestrators")
+			return PreparedBatch{}, releaseErr
+		}
+	}
+	return batch, nil
 }
 
 // AcceptPiggyback acknowledges reports after the combined user turn is accepted.

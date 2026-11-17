@@ -185,8 +185,9 @@ type ConversationRecord struct {
 	// ProjectID is set for both scopes. SessionID is the session currently
 	// controlling the conversation; for project-scoped orchestrators it changes
 	// on clean replacement while the conversation identity remains stable.
-	ProjectID ProjectID `json:"projectId"`
-	SessionID SessionID `json:"sessionId,omitempty"`
+	ProjectID       ProjectID `json:"projectId"`
+	WorkspaceFolder string    `json:"workspaceFolder,omitempty"`
+	SessionID       SessionID `json:"sessionId,omitempty"`
 	ReviewID  string    `json:"reviewId,omitempty"`
 	// ActiveBranchID identifies the one provider-thread lineage the session may
 	// write. Sibling branches remain durable and are selected by moving this head;
@@ -424,6 +425,17 @@ type ConversationAccount struct {
 	ReauthReason string `json:"reauthReason,omitempty"`
 }
 
+// RequireLogin records that the provider refused the login at at.
+func (a *ConversationAccount) RequireLogin(reason, failureID string, at time.Time) {
+	a.AuthenticationState = "required"
+	a.ReauthRequiredAt = &at
+	a.ReauthReason = reason
+	a.LastAuthFailureAt = &at
+	a.LastAuthFailureReason = reason
+	a.AuthFailureID = failureID
+	a.AuthVerifiedAt = nil
+}
+
 // ThreadStatus is the provider's own lifecycle state for a thread. It is NOT AO's
 // session status, which stays derived from durable facts at read time; this is one
 // more such fact.
@@ -586,7 +598,33 @@ type ConversationTurn struct {
 	// the whole plan on every change, so only the latest is an answer and the
 	// earlier ones are the same plan with fewer steps ticked off.
 	Plan *ConversationPlan `json:"plan,omitempty"`
+	// Artifacts are the session artifact files the turn created or edited, as
+	// AO saw them in the artifact directory when the turn ended. Unlike Diff it
+	// does not depend on the provider, so it covers files written through a
+	// shell command. Nil for a turn AO did not watch from its start, or one that
+	// changed none. A pointer, as Diff is, so a turn stays comparable.
+	Artifacts *ConversationTurnArtifacts `json:"artifacts,omitempty"`
 }
+
+// ConversationTurnArtifacts is the set of session artifact files a turn changed.
+type ConversationTurnArtifacts struct {
+	Files []ConversationTurnArtifact `json:"files"`
+}
+
+// ConversationTurnArtifact is one session artifact file a turn changed.
+type ConversationTurnArtifact struct {
+	// Path is relative to the session's artifact directory, slash-separated.
+	Path string `json:"path"`
+	// Status is TurnArtifactAdded or TurnArtifactModified.
+	Status string `json:"status"`
+}
+
+// The ways a turn can change an artifact file. A file the turn deleted is not
+// listed: there is nothing left to show for it.
+const (
+	TurnArtifactAdded    = "added"
+	TurnArtifactModified = "modified"
+)
 
 // ConversationFailureCode identifies a provider failure with a known recovery path.
 type ConversationFailureCode string
@@ -891,3 +929,12 @@ const (
 	ConversationSteerRejectedByProvider          ConversationSteerRejectionKind = "provider_refused"
 	ConversationSteerRejectedInterfaceTransition ConversationSteerRejectionKind = "interface_transition"
 )
+
+// ConversationBatchedDelivery links a queued turn AO batched into another turn's
+// provider input. SteerActivityID names the steer that carried it; empty means a
+// queue drain, where the turn joined DeliveredWithTurnID's input from the start.
+type ConversationBatchedDelivery struct {
+	TurnID              string `json:"turnId"`
+	DeliveredWithTurnID string `json:"deliveredWithTurnId"`
+	SteerActivityID     string `json:"steerActivityId,omitempty"`
+}

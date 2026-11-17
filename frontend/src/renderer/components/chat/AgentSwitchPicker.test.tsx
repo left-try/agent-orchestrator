@@ -1,7 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import claudeCodeLogo from "../../assets/agents/claude-code.svg";
+import codexLogo from "../../assets/agents/codex.svg";
 import { toggleModelFavorite } from "../../lib/model-favorites";
 import { useUiStore } from "../../stores/ui-store";
 import { AgentModelPicker, type PendingAgentSwitch, type PickerSource } from "./AgentSwitchPicker";
@@ -23,10 +26,15 @@ vi.mock("../../hooks/useAgentModelsQuery", () => ({
 			refreshError: "droid failed to start: Cannot find module 'tree-sitter'\n    at Module._resolveFilename",
 		} : ({
 			models: agent === "codex"
-				? [{ id: "gpt-x", label: "GPT X", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }]
+				? [
+					{ id: "gpt-x", label: "GPT X", isDefault: true, efforts: ["low", "high"], defaultEffort: "high", provider: "openai" },
+					{ id: "gpt-y", label: "GPT Y", efforts: ["low"], defaultEffort: "low", provider: "openai" },
+					{ id: "gpt-gone", label: "GPT Gone", unavailableReason: "Requires a newer CLI", provider: "openai" },
+				]
 				: agent === "cursor"
 					? ["claude-opus-4-8-high", "claude-opus-4-8-thinking-high"].map((id) => ({ id, label: id }))
 					: [],
+			configuredProviders: agent === "codex" ? ["openai"] : [],
 		}),
 	}),
 }));
@@ -178,6 +186,85 @@ describe("AgentModelPicker", () => {
 		}
 	});
 
+	it("names each favourite's agent when the same model is saved for different agents", async () => {
+		const user = userEvent.setup();
+		const favorites = [
+			{ harness: "claude-code", row: "opus", model: "opus", label: "Opus" },
+			{ harness: "cursor", row: "claude-opus-4-8", model: "claude-opus-4-8-high", label: "Opus" },
+		];
+		favorites.forEach(toggleModelFavorite);
+		try {
+			open();
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			expect(screen.getByRole("menuitemradio", { name: "Opus, Claude Code" })).toBeInTheDocument();
+			expect(screen.getByRole("menuitemradio", { name: "Opus, Cursor" })).toBeInTheDocument();
+		} finally {
+			act(() => favorites.forEach(toggleModelFavorite));
+		}
+	});
+
+	it("shows a favourite's logo without its agent's name, as before #7822", async () => {
+		const user = userEvent.setup();
+		const saved = { harness: "codex", row: "gpt-x", model: "gpt-x", label: "GPT X" };
+		toggleModelFavorite(saved);
+		try {
+			open();
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			const row = await screen.findByRole("menuitemradio", { name: "GPT X, Codex" });
+			expect(row.querySelector("img")).toBeInTheDocument();
+			expect(within(row).queryByText("Codex")).not.toBeInTheDocument();
+		} finally {
+			act(() => toggleModelFavorite(saved));
+		}
+	});
+
+	it("draws the agent's name on a lone favourite whose logo another agent shares", async () => {
+		const user = userEvent.setup();
+		const saved = { harness: "opencode-v2", row: "gpt-x", model: "gpt-x", label: "GPT X" };
+		toggleModelFavorite(saved);
+		try {
+			open();
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			const row = await screen.findByRole("menuitemradio", { name: "GPT X, OpenCode 2" });
+			expect(row.querySelector("img")).toBeInTheDocument();
+			expect(within(row).getByText("OpenCode 2")).toHaveAttribute("aria-hidden", "true");
+		} finally {
+			act(() => toggleModelFavorite(saved));
+		}
+	});
+
+	it("draws the agent's name where two agents' favourites share a logo and a model name", async () => {
+		const user = userEvent.setup();
+		const favorites = [
+			{ harness: "opencode", row: "gpt-x", model: "gpt-x", label: "GPT X" },
+			{ harness: "opencode-v2", row: "gpt-x", model: "gpt-x", label: "GPT X" },
+		];
+		favorites.forEach(toggleModelFavorite);
+		try {
+			open();
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			const first = await screen.findByRole("menuitemradio", { name: "GPT X, OpenCode" });
+			const second = screen.getByRole("menuitemradio", { name: "GPT X, OpenCode 2" });
+			expect(within(first).getByText("OpenCode")).toHaveAttribute("aria-hidden", "true");
+			expect(within(second).getByText("OpenCode 2")).toHaveAttribute("aria-hidden", "true");
+		} finally {
+			act(() => favorites.forEach(toggleModelFavorite));
+		}
+	});
+
+	it("reads a favourite's agent after its model's settings", async () => {
+		const user = userEvent.setup();
+		const saved = { harness: "codex", row: "gpt-x", model: "gpt-x", label: "GPT X", effort: "high", effortLabel: "High", fast: true };
+		toggleModelFavorite(saved);
+		try {
+			open();
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			expect(await screen.findByRole("menuitemradio", { name: /^GPT X.*Fast mode.*High, Codex$/ })).toBeInTheDocument();
+		} finally {
+			act(() => toggleModelFavorite(saved));
+		}
+	});
+
 	it("greys out a favourite whose model the agent no longer lists", async () => {
 		const user = userEvent.setup();
 		const gone = { harness: "codex", row: "gpt-gone", model: "gpt-gone", label: "GPT Gone" };
@@ -201,6 +288,79 @@ describe("AgentModelPicker", () => {
 		fireEvent.click(await screen.findByRole("menuitemradio", { name: "Codex" }));
 		expect(onPendingChange).toHaveBeenCalledWith({ harness: "codex" });
 		expect(screen.queryAllByRole("menu")).toHaveLength(1);
+	});
+
+	it("selects the first supported favourite for a pending agent before its provider default", async () => {
+		const favorite = { harness: "codex", row: "gpt-y", model: "gpt-y", label: "GPT Y", effort: "low", effortLabel: "Low" };
+		toggleModelFavorite(favorite);
+		const onPendingChange = vi.fn();
+		function ControlledPicker() {
+			const [pending, setPending] = useState<PendingAgentSwitch | undefined>({ harness: "codex" });
+			return <AgentModelPicker currentHarness="claude-code" current={{ models: [], modelLabel: "Claude Code", efforts: [] }} agentSwitch={{ projectId: "p", pending, onPendingChange: (next) => { onPendingChange(next); setPending(next); } }} />;
+		}
+		try {
+			render(<QueryClientProvider client={new QueryClient()}><ControlledPicker /></QueryClientProvider>);
+			await userEvent.setup().click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			await vi.waitFor(() => expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "codex", model: "gpt-y", effort: "low" })));
+		} finally {
+			act(() => toggleModelFavorite(favorite));
+		}
+	});
+
+	it("uses a supported provider default when the starred model is unavailable", async () => {
+		const favorite = { harness: "codex", row: "gpt-gone", model: "gpt-gone", label: "GPT Gone" };
+		toggleModelFavorite(favorite);
+		const onPendingChange = vi.fn();
+		function ControlledPicker() {
+			const [pending, setPending] = useState<PendingAgentSwitch | undefined>({ harness: "codex" });
+			return <AgentModelPicker currentHarness="claude-code" current={{ models: [], modelLabel: "Claude Code", efforts: [] }} agentSwitch={{ projectId: "p", pending, onPendingChange: (next) => { onPendingChange(next); setPending(next); } }} />;
+		}
+		try {
+			render(<QueryClientProvider client={new QueryClient()}><ControlledPicker /></QueryClientProvider>);
+			await userEvent.setup().click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			await vi.waitFor(() => expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "codex", model: "gpt-x", modelLabel: "GPT X", shownEffort: "high" })));
+		} finally {
+			act(() => toggleModelFavorite(favorite));
+		}
+	});
+
+	it("keeps an explicit pending model when the provider catalog arrives", async () => {
+		const onPendingChange = vi.fn();
+		function ControlledPicker() {
+			const [pending, setPending] = useState<PendingAgentSwitch | undefined>({ harness: "codex", model: "gpt-y", modelLabel: "GPT Y" });
+			return <AgentModelPicker currentHarness="claude-code" current={{ models: [], modelLabel: "Claude Code", efforts: [] }} agentSwitch={{ projectId: "p", pending, onPendingChange: (next) => { onPendingChange(next); setPending(next); } }} />;
+		}
+		render(<QueryClientProvider client={new QueryClient()}><ControlledPicker /></QueryClientProvider>);
+		await userEvent.setup().click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await screen.findByRole("menuitem", { name: /Model.*GPT Y/ });
+		expect(onPendingChange).not.toHaveBeenCalled();
+	});
+
+	it("shows the agent's logo on a chat picker and its agent rows (#8129)", async () => {
+		const user = userEvent.setup();
+		open();
+		const trigger = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
+		expect(trigger.querySelector('img[aria-hidden="true"]')).toBeInTheDocument();
+		await user.click(trigger);
+		await user.click(screen.getByRole("menuitem", { name: /Agent/ }));
+		const codex = await screen.findByRole("menuitemradio", { name: "Codex" });
+		expect(codex.querySelector('img[aria-hidden="true"]')).toBeInTheDocument();
+	});
+
+	it("shows the pending agent's logo on the chat picker", () => {
+		open({ harness: "codex" });
+		const trigger = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
+		expect(trigger.querySelector("img")).toHaveAttribute("src", codexLogo);
+		expect(trigger.querySelector("img")).not.toHaveAttribute("src", claudeCodeLogo);
+	});
+
+	it("shows each agent's logo on chat search rows", async () => {
+		const user = userEvent.setup();
+		open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.type(screen.getByPlaceholderText("Search agents and models"), "gpt");
+		const row = await screen.findByRole("menuitemradio", { name: /GPT X.*Codex/ });
+		expect(row.querySelector("img")).toHaveAttribute("src", codexLogo);
 	});
 
 	it("leaves out a chat agent whose chat adapter is missing", async () => {

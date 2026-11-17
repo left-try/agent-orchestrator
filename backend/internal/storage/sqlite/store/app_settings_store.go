@@ -33,6 +33,8 @@ type AppSettings struct {
 	// SessionRetentionDays is how long an archived session is kept before the
 	// daemon deletes it; 0 keeps it.
 	SessionRetentionDays int
+	AccountHandoff       bool
+	Kanban               domain.KanbanSettings
 	UpdatedAt            time.Time
 }
 
@@ -46,6 +48,14 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 	if err := json.Unmarshal([]byte(row.HarnessDefaults), &defaults); err != nil {
 		return AppSettings{}, fmt.Errorf("read harness defaults: %w", err)
 	}
+	kanban := domain.DefaultKanbanSettings()
+	if row.KanbanConfig != "" {
+		var parsed domain.KanbanSettings
+		if err := json.Unmarshal([]byte(row.KanbanConfig), &parsed); err != nil {
+			return AppSettings{}, fmt.Errorf("read kanban config: %w", err)
+		}
+		kanban = domain.NormalizeKanbanSettings(parsed)
+	}
 	return AppSettings{
 		HarnessDefaults: defaults,
 		// Normalized on read: a value written by a build that knows a mode this
@@ -54,6 +64,8 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		VersionRefresh:       row.VersionRefresh,
 		ComputerUse:          row.ComputerUse,
 		SessionRetentionDays: int(row.SessionRetentionDays),
+		AccountHandoff:       row.AccountHandoff,
+		Kanban:               kanban,
 		UpdatedAt:            row.UpdatedAt,
 	}, nil
 }
@@ -109,6 +121,36 @@ func (s *Store) SetSessionRetentionDays(ctx context.Context, days int, now time.
 		UpdatedAt:            now,
 	}); err != nil {
 		return fmt.Errorf("set session retention: %w", err)
+	}
+	return nil
+}
+
+// SetAccountHandoff stores the usage-limit account handoff setting.
+func (s *Store) SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetAccountHandoff(ctx, gen.SetAccountHandoffParams{
+		AccountHandoff: enabled,
+		UpdatedAt:      now,
+	}); err != nil {
+		return fmt.Errorf("set account handoff: %w", err)
+	}
+	return nil
+}
+
+// SetKanbanSettings stores the user's Kanban board customization preferences.
+func (s *Store) SetKanbanSettings(ctx context.Context, settings domain.KanbanSettings, now time.Time) error {
+	data, err := json.Marshal(domain.NormalizeKanbanSettings(settings))
+	if err != nil {
+		return err
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetKanbanConfig(ctx, gen.SetKanbanConfigParams{
+		KanbanConfig: string(data),
+		UpdatedAt:    now,
+	}); err != nil {
+		return fmt.Errorf("set kanban config: %w", err)
 	}
 	return nil
 }

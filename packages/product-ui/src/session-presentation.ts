@@ -53,6 +53,7 @@ const englishLabels: Record<SessionPresentationMessageKey, string> = {
 	"zone.pending": "In review",
 	"zone.working": "Working",
 	"zone.done": "Terminated",
+	"column.backlog": "Backlog",
 	"column.building": "Building",
 	"column.validating": "Validating",
 	// Deliberate: this lane is the review-feedback loop, not a queue of PRs
@@ -65,6 +66,7 @@ const englishLabels: Record<SessionPresentationMessageKey, string> = {
 	// different wording later is one string per locale.
 	"column.needs_review": "In review",
 	"column.ready": "Ready",
+	"column.done": "Done",
 	"column.archive": "Archive",
 	"timeline.no_signal": "No Signal",
 	"timeline.ci_failed": "CI Failed",
@@ -72,22 +74,24 @@ const englishLabels: Record<SessionPresentationMessageKey, string> = {
 	"timeline.commented": "Commented",
 	"displayStatus.working": "Working",
 	"displayStatus.blocked": "Blocked",
+	"displayStatus.needsInput": "Needs input",
 	"displayStatus.exited": "Exited",
 	"displayStatus.noSignal": "No signal",
 	"displayStatus.interrupted": "Interrupted",
-	"displayStatus.awaitingPr": "Awaiting PR",
+	"displayStatus.idle": "Idle",
 	"displayStatus.fixingCiFailures": "Fixing CI failures",
 	"displayStatus.addressingComments": "Addressing comments",
-	"displayStatus.needsReview": "Needs review",
 	"displayStatus.reviewScheduled": "Review scheduled",
 	"displayStatus.reviewing": "Reviewing",
-	"displayStatus.reviewFailed": "Review failed",
-	"displayStatus.reviewPending": "Review pending",
+	"displayStatus.retryingReview": "Retrying review",
 	"displayStatus.draft": "Draft",
+	"displayStatus.awaitingReview": "Awaiting review",
+	"displayStatus.reviewFailed": "Review failed",
+	"displayStatus.reviewCancelled": "Review cancelled",
 	"displayStatus.ciFailing": "CI failing",
+	"displayStatus.mergeConflicts": "Merge conflicts",
 	"displayStatus.commented": "Commented",
 	"displayStatus.changesRequested": "Changes requested",
-	"displayStatus.needsHumanReview": "Needs human review",
 	"displayStatus.mergeable": "Mergeable",
 	"displayStatus.approved": "Approved",
 	"displayStatus.merged": "Merged",
@@ -103,22 +107,24 @@ const englishLabels: Record<SessionPresentationMessageKey, string> = {
 export const displayStatusLabelKeys: Record<DisplayStatus, `displayStatus.${string}`> = {
 	Working: "displayStatus.working",
 	Blocked: "displayStatus.blocked",
+	"Needs input": "displayStatus.needsInput",
 	Exited: "displayStatus.exited",
 	"No signal": "displayStatus.noSignal",
 	Interrupted: "displayStatus.interrupted",
-	"Awaiting PR": "displayStatus.awaitingPr",
+	Idle: "displayStatus.idle",
 	"Fixing CI failures": "displayStatus.fixingCiFailures",
 	"Addressing comments": "displayStatus.addressingComments",
-	"Needs review": "displayStatus.needsReview",
 	"Review scheduled": "displayStatus.reviewScheduled",
 	Reviewing: "displayStatus.reviewing",
-	"Review failed": "displayStatus.reviewFailed",
-	"Review pending": "displayStatus.reviewPending",
+	"Retrying review": "displayStatus.retryingReview",
 	Draft: "displayStatus.draft",
+	"Awaiting review": "displayStatus.awaitingReview",
+	"Review failed": "displayStatus.reviewFailed",
+	"Review cancelled": "displayStatus.reviewCancelled",
 	"CI failing": "displayStatus.ciFailing",
+	"Merge conflicts": "displayStatus.mergeConflicts",
 	Commented: "displayStatus.commented",
 	"Changes requested": "displayStatus.changesRequested",
-	"Needs human review": "displayStatus.needsHumanReview",
 	Mergeable: "displayStatus.mergeable",
 	Approved: "displayStatus.approved",
 	Merged: "displayStatus.merged",
@@ -330,8 +336,7 @@ export const boardAttentionZoneOrder: AttentionZone[] = ["working", "action", "p
 
 /**
  * Board lanes in delivery order: building -> validating -> in review ->
- * ready. The middle two are the same review-feedback loop seen from either
- * side: validating while AO turns it, in review while a person does.
+ * ready -> done. `backlog` is opt-in and added by board customization settings.
  * `archive` is deliberately absent — terminated sessions render in the archive
  * sheet, not as a lane.
  */
@@ -340,6 +345,16 @@ export const boardKanbanColumnOrder: KanbanColumn[] = [
 	"validating",
 	"needs_review",
 	"ready",
+	"done",
+];
+
+export const allConfigurableKanbanColumns: KanbanColumn[] = [
+	"backlog",
+	"building",
+	"validating",
+	"needs_review",
+	"ready",
+	"done",
 ];
 
 /**
@@ -384,6 +399,15 @@ type KanbanColumnBase = Omit<KanbanColumnView, "label"> & {
 };
 
 const kanbanColumnBases: Record<KanbanColumn, KanbanColumnBase> = {
+	backlog: {
+		column: "backlog",
+		labelKey: "column.backlog",
+		glow: "var(--color-overlay-faint)",
+		dot: "var(--color-status-idle)",
+		dotGlow: false,
+		titleClassName: "text-muted-foreground",
+		dotClassName: "bg-status-idle",
+	},
 	building: {
 		column: "building",
 		labelKey: "column.building",
@@ -419,6 +443,15 @@ const kanbanColumnBases: Record<KanbanColumn, KanbanColumnBase> = {
 		dotGlow: true,
 		titleClassName: "text-status-ready",
 		dotClassName: "bg-status-ready",
+	},
+	done: {
+		column: "done",
+		labelKey: "column.done",
+		glow: "color-mix(in srgb, var(--color-status-merged) 7%, transparent)",
+		dot: "var(--color-status-merged)",
+		dotGlow: false,
+		titleClassName: "text-status-merged",
+		dotClassName: "bg-status-merged",
 	},
 	archive: {
 		column: "archive",

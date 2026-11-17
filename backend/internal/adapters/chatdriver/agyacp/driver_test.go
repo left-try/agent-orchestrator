@@ -24,7 +24,7 @@ func TestSessionModeMapsApprovalTiersOntoAntigravityModes(t *testing.T) {
 	for mode, want := range map[ports.PermissionMode]string{
 		ports.PermissionModeDefault:           "default",
 		ports.PermissionModeAcceptEdits:       "auto_edit",
-		ports.PermissionModeAuto:              "yolo", // no classifier mode: auto runs without asking
+		ports.PermissionModeAuto:              "auto_edit", // separate server lacks native Auto
 		ports.PermissionModeBypassPermissions: "yolo",
 	} {
 		if got := sessionMode(mode); got != want {
@@ -33,13 +33,34 @@ func TestSessionModeMapsApprovalTiersOntoAntigravityModes(t *testing.T) {
 	}
 }
 
-func TestBindingLeavesEveryPermissionRequestToTheUser(t *testing.T) {
+func TestPermissionPolicyApprovesOnceOnlyInBypassMode(t *testing.T) {
 	cfg := buildConfig(nil, testResolver(t, nil), nil)
-	if cfg.PermissionPolicy != nil {
-		t.Fatal("a PermissionPolicy could answer allow_always and outlive a stricter mode")
-	}
 	if cfg.ValidateTurnSettings != nil {
 		t.Fatal("approval modes switch live; no restart validator is needed")
+	}
+	request := acpsdk.RequestPermissionRequest{Options: []acpsdk.PermissionOption{
+		{OptionId: "always", Kind: acpsdk.PermissionOptionKindAllowAlways},
+		{OptionId: "once", Kind: acpsdk.PermissionOptionKindAllowOnce},
+	}}
+	if got, ok := cfg.PermissionPolicy(ports.PermissionModeBypassPermissions, request); !ok || got != "once" {
+		t.Fatalf("bypass policy = %q, %v; want allow_once", got, ok)
+	}
+	for _, mode := range []ports.PermissionMode{ports.PermissionModeDefault, ports.PermissionModeAcceptEdits, ports.PermissionModeAuto} {
+		if got, ok := cfg.PermissionPolicy(mode, request); ok {
+			t.Errorf("policy(%q) answered %q; want user decision", mode, got)
+		}
+	}
+}
+
+func TestSessionModeForAgentMapsNativeAgyAuto(t *testing.T) {
+	init := acpsdk.InitializeResponse{AgentInfo: &acpsdk.Implementation{Name: cliServerAgentName, Version: "1.5.6"}}
+	modeFor := sessionModeForAgent(init)
+	if modeFor == nil || modeFor(ports.PermissionModeAuto) != "auto" {
+		t.Fatalf("native Agy Auto mode = %v", modeFor)
+	}
+	legacy := acpsdk.InitializeResponse{AgentInfo: &acpsdk.Implementation{Name: serverAgentName, Version: "1.3.0"}}
+	if sessionModeForAgent(legacy) != nil {
+		t.Fatal("separate server should keep its own mode mapping")
 	}
 }
 
