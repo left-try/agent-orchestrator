@@ -506,7 +506,8 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 	config := restoredAgentConfig(rec, project.Config)
 	cfg := ports.SpawnConfig{
 		ProjectID: rec.ProjectID, IssueID: rec.IssueID, Kind: rec.Kind,
-		Harness: rec.Harness, RequestedMode: domain.SessionModeChat,
+		WorkspaceFolder: rec.Metadata.WorkspaceFolder,
+		Harness:         rec.Harness, RequestedMode: domain.SessionModeChat,
 		AgentConfig: config, AgentConfigResolved: true, Async: true,
 	}
 	if m.forkRetry != nil && m.isSessionFork(ctx, rec.ID) {

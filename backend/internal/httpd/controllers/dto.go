@@ -689,6 +689,9 @@ type SpawnSessionRequest struct {
 	// BaseBranch starts the session's branch from this branch instead of the
 	// project's default, to stack its work on another pull request.
 	BaseBranch string `json:"baseBranch,omitempty" maxLength:"255"`
+	// WorkspaceFolder binds the session to one child repository relative path in
+	// a workspace project.
+	WorkspaceFolder string `json:"workspaceFolder,omitempty" maxLength:"512"`
 	// Mode picks the conversation controller: chat talks to the agent over a
 	// structured connection, tui opens the agent's native terminal interface.
 	// Omitted resolves to the daemon-owned preference, which defaults to Chat for
@@ -2001,7 +2004,10 @@ type ReviewIDParam struct {
 // SpawnOrchestratorRequest is the body of POST /api/v1/orchestrators.
 type SpawnOrchestratorRequest struct {
 	ProjectID domain.ProjectID `json:"projectId"`
-	Clean     bool             `json:"clean,omitempty"`
+	// WorkspaceFolder scopes the orchestrator to a child repo relative path in
+	// a workspace project. Empty targets the main project orchestrator.
+	WorkspaceFolder string `json:"workspaceFolder,omitempty" maxLength:"512"`
+	Clean           bool   `json:"clean,omitempty"`
 	// Mode applies only when this request creates a project orchestrator. An
 	// idempotent ensure returns the existing orchestrator unchanged, and a clean
 	// replacement inherits the existing orchestrator's currently committed mode.

@@ -292,6 +292,7 @@ type Conversation struct {
 	ActiveBranchID             string
 	OpencodeMode               string
 	AutoCompactWindow          string
+	WorkspaceFolder            string
 }
 
 type ConversationActivity struct {
@@ -798,6 +799,7 @@ type Session struct {
 	TerminatedAt                     sql.NullTime
 	ImportSource                     string
 	DisplayNameExplicit              bool
+	WorkspaceFolder                  string
 }
 
 type SessionAgentAccount struct {

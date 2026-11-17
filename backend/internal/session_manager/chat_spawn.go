@@ -306,11 +306,16 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 			return launchEnv, nil
 		},
 		ControllerReady: func(started ChatStarted) (ChatControllerCommit, error) {
+			workspaceFolder := in.cfg.WorkspaceFolder
+			if workspaceFolder == "" {
+				workspaceFolder = in.record.Metadata.WorkspaceFolder
+			}
 			metadata := domain.SessionMetadata{
 				Permissions:       in.record.Metadata.Permissions,
 				Branch:            in.workspace.Branch,
 				WorkspacePath:     in.workspace.Path,
 				WorkspaceRepoPath: in.workspace.RepoPath,
+				WorkspaceFolder:   workspaceFolder,
 				Prompt:            in.prompt,
 				DiffBaseSHA:       diffBaseSHA,
 				DiffBaseRef:       diffBaseRef,

@@ -13,8 +13,9 @@ export function openRemoteOrchestrator(
 	mode?: "tui",
 	clean = false,
 	source: OrchestratorSpawnSource = "sidebar",
+	workspaceFolder?: string,
 ): Promise<string> {
-	const key = `${refKey({ host: hostId, id: projectId })}:${clean ? "clean" : "ensure"}`;
+	const key = `${refKey({ host: hostId, id: projectId, folder: workspaceFolder ?? "" })}:${clean ? "clean" : "ensure"}`;
 	const current = inFlight.get(key);
 	if (current) return current;
 	if (!clean && orchestrator && !sessionAgentExited(orchestrator)) return Promise.resolve(orchestrator.id);
@@ -23,7 +24,7 @@ export function openRemoteOrchestrator(
 			await resumeOrchestrator(orchestrator.id, hostId);
 			return orchestrator.id;
 		}
-		return spawnOrchestrator(projectId, source, clean, mode, undefined, hostId);
+		return spawnOrchestrator(projectId, source, clean, mode, undefined, hostId, workspaceFolder);
 	})();
 	inFlight.set(key, request);
 	void request.finally(() => {

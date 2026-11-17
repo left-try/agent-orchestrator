@@ -84,24 +84,9 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 	if in.RequestedAgent != "" && !in.RequestedAgent.IsKnown() {
 		return DelegateTaskOutcome{}, apierr.Invalid("UNKNOWN_HARNESS", "Unknown requested agent", nil)
 	}
-	if in.WorkspaceFolder != "" {
-		if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
-			return DelegateTaskOutcome{}, apierr.Invalid("INVALID_WORKSPACE_FOLDER", "workspaceFolder is only valid for workspace projects", nil)
-		}
-		repos, err := s.store.ListWorkspaceRepos(ctx, project.ID)
-		if err != nil {
-			return DelegateTaskOutcome{}, err
-		}
-		found := false
-		for _, repo := range repos {
-			if repo.RelativePath == in.WorkspaceFolder && repo.GitStatus.WithDefault() == domain.GitStatusReady {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return DelegateTaskOutcome{}, apierr.Invalid("INVALID_WORKSPACE_FOLDER", "workspaceFolder must identify a registered child repository", nil)
-		}
+	in.WorkspaceFolder, err = s.validateWorkspaceFolder(ctx, project, in.WorkspaceFolder)
+	if err != nil {
+		return DelegateTaskOutcome{}, err
 	}
 	if in.RequestedMode != "" && !in.RequestedMode.Valid() {
 		return DelegateTaskOutcome{}, apierr.Invalid("INVALID_SESSION_MODE", "mode must be chat or tui", nil)

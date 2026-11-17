@@ -44,7 +44,7 @@ import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
  * chat, so starting a task reads as one continuous conversation.
  */
 // A page opened from Report a problem is `report`: its agent runs on Scratchpad only.
-export function NewChatPage({ projectId, hostId, report }: { projectId: string; hostId?: string; report?: boolean }) {
+export function NewChatPage({ projectId, hostId, initialFolder, report }: { projectId: string; hostId?: string; initialFolder?: string; report?: boolean }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const router = useRouter();
@@ -54,8 +54,8 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const localWorkspace = useWorkspaceQuery().data?.find((item) => item.id === projectId);
 	const remoteWorkspace = useRemoteWorkspaces().data?.find((item) => item.id === projectId && item.hostId === hostId);
 	const workspace = hostId ? remoteWorkspace : localWorkspace;
-	const [workspaceFolder, setWorkspaceFolder] = useState("");
-	useEffect(() => setWorkspaceFolder(""), [projectId, hostId]);
+	const [workspaceFolder, setWorkspaceFolder] = useState(initialFolder ?? "");
+	useEffect(() => setWorkspaceFolder(initialFolder ?? ""), [projectId, hostId, initialFolder]);
 	const hostAccounts = useAgentAccounts(Boolean(task.account), hostId);
 	const providerRows = task.account ? (hostAccounts.data ?? []).filter((row) => row.provider === task.account?.provider) : [];
 	const accountRows = withoutSameLogins(providerRows, task.account?.value ?? providerRows.find((row) => row.default)?.id);

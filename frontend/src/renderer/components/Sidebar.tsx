@@ -61,7 +61,9 @@ import {
 import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { artifactCount, groupArtifactsByProject } from "../lib/artifacts";
-import { filterSessionsByFolder } from "../lib/workspace-folder";
+import { reorderWorkspaceItems, sessionMatchesWorkspaceFolder, workspaceFolderRepoForSession } from "../lib/workspace-folder";
+import { readSidebarCustomOrder, writeSidebarCustomOrder } from "../lib/sidebar-custom-order";
+import { applyOrder } from "../lib/sidebar-order";
 import {
 	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
@@ -114,7 +116,6 @@ import {
 } from "./ui/context-menu";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
 import { SessionPreviewCardAdapter } from "./SessionsBoardAdapters";
-import { WorkspaceFolderMarker } from "./WorkspaceFolderMarker";
 
 const EMPTY_WORKSPACE_REPOS: NonNullable<WorkspaceSummary["workspaceRepos"]> = [];
 import {
@@ -423,6 +424,19 @@ function useShowMoreCap<T extends { id: string }>(
 	return { listed, hiddenCount: Math.max(0, items.length - limit), showAll, toggleShowAll };
 }
 
+/** Folder chat lists reveal 10, 20, 40... additional rows on successive clicks. */
+function useProgressiveShowMore<T>(items: T[], initial = 5) {
+	const [visibleCount, setVisibleCount] = useState(initial);
+	const [batchSize, setBatchSize] = useState(10);
+	useEffect(() => { setVisibleCount(initial); setBatchSize(10); }, [initial, items.length]);
+	const remaining = Math.max(0, items.length - visibleCount);
+	// Keep the next row beneath the translucent control so users can see that
+	// the list continues without exposing another full chat by default.
+	const listed = items.slice(0, visibleCount + (remaining > 0 ? 1 : 0));
+	const showMore = () => { setVisibleCount((count) => count + batchSize); setBatchSize((size) => size * 2); };
+	return { listed, remaining, showMore };
+}
+
 function SidebarSectionScroller({
 	children,
 	className,
@@ -544,8 +558,11 @@ function useSelection() {
 		projectId?: string;
 		sessionId?: string;
 	};
-	const pathname = useRouterState({
-		select: (state) => state.location.pathname,
+	const { pathname, search } = useRouterState({
+		select: (state) => ({
+			pathname: state.location.pathname,
+			search: state.location.search as { folder?: string } | undefined,
+		}),
 	});
 	const goHome = useCallback(() => void navigate({ to: "/" }), [navigate]);
 	const goAutomations = useCallback(() => void navigate({ to: "/automations" }), [navigate]);
@@ -557,7 +574,12 @@ function useSelection() {
 	const goConnectMobile = useCallback(() => openGlobalSettings("mobile", { startPairing: true }), [openGlobalSettings]);
 	const goSettings = useCallback((projectId: string, cloudOrgId?: string) => openProjectSettings(projectId, { cloudOrgId }), [openProjectSettings]);
 	const goProject = useCallback(
-		(projectId: string) => void navigate({ to: "/projects/$projectId", params: { projectId } }),
+		(projectId: string, folder?: string) =>
+			void navigate({
+				to: "/projects/$projectId",
+				params: { projectId },
+				search: folder ? { folder } : undefined,
+			}),
 		[navigate],
 	);
 	const goSession = useCallback(
@@ -583,6 +605,7 @@ function useSelection() {
 		activeRemoteSessionId: params.hostId ? params.sessionId : undefined,
 		activeProjectId: params.hostId ? undefined : params.projectId,
 		activeSessionId: params.hostId ? undefined : params.sessionId,
+		activeFolder: params.hostId ? undefined : search?.folder,
 		goHome,
 		goAutomations,
 		goArtifacts,
@@ -595,7 +618,7 @@ function useSelection() {
 		goSettings,
 		goProject,
 		goSession,
-	}), [goArtifacts, goAutomations, goUsage, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
+	}), [goArtifacts, goAutomations, goUsage, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname, search?.folder]);
 }
 
 // Rows showing the red alert sit above the rest, but only in the default
@@ -1520,7 +1543,7 @@ type ProjectItemProps = {
 // keys on the raw session id: a just-opened session may not be listed yet.
 function projectSelectionKey(workspace: WorkspaceSummary, selection: Selection): string {
 	const sessionId = selection.activeSessionId ?? "";
-	if (selection.activeProjectId === workspace.id) return `active\u0000${sessionId}`;
+	if (selection.activeProjectId === workspace.id) return `active\u0000${sessionId}\u0000${selection.activeFolder ?? ""}`;
 	return workspace.sessions.some((session) => session.id === sessionId) ? sessionId : "";
 }
 
@@ -1544,6 +1567,270 @@ function LazyMenuEntries({ build }: { build: () => MenuEntry[] }) {
 	return <MenuEntries entries={build()} />;
 }
 
+type WorkspaceFolderTreeNode = {
+	name: string;
+	path: string;
+	repo?: NonNullable<WorkspaceSummary["workspaceRepos"]>[number];
+	children: WorkspaceFolderTreeNode[];
+};
+
+function buildWorkspaceFolderTree(repos: NonNullable<WorkspaceSummary["workspaceRepos"]>): WorkspaceFolderTreeNode[] {
+	const roots: WorkspaceFolderTreeNode[] = [];
+	for (const repo of repos) {
+		const parts = repo.relativePath.split("/").filter(Boolean);
+		if (parts.length === 0) {
+			const rootRepo: WorkspaceFolderTreeNode = roots.find((candidate) => candidate.path === ".") ?? {
+				name: repo.name,
+				path: ".",
+				children: [],
+			};
+			if (!roots.includes(rootRepo)) roots.push(rootRepo);
+			rootRepo.repo = repo;
+			continue;
+		}
+		let nodes = roots;
+		let path = "";
+		for (const part of parts) {
+			path = path ? `${path}/${part}` : part;
+			let node = nodes.find((candidate) => candidate.path === path);
+			if (!node) {
+				node = { name: part, path, children: [] };
+				nodes.push(node);
+			}
+			nodes = node.children;
+		}
+		const leaf = findWorkspaceFolderNode(roots, path);
+		if (leaf) leaf.repo = repo;
+	}
+	return roots;
+}
+
+function findWorkspaceFolderNode(nodes: WorkspaceFolderTreeNode[], path: string): WorkspaceFolderTreeNode | undefined {
+	for (const node of nodes) {
+		if (node.path === path) return node;
+		const nested = findWorkspaceFolderNode(node.children, path);
+		if (nested) return nested;
+	}
+	return undefined;
+}
+
+function WorkspaceFolderBranchList({
+	workspace,
+	nodes,
+	parentPath,
+	projectKey,
+	allSessions,
+	selection,
+	projectDragInProgress,
+	consumeDragClick = () => false,
+	onKilled,
+	onOpenSession,
+}: {
+	workspace: WorkspaceSummary;
+	nodes: WorkspaceFolderTreeNode[];
+	parentPath: string;
+	projectKey: string;
+	allSessions: WorkspaceSession[];
+	selection: Selection;
+	projectDragInProgress: boolean;
+	consumeDragClick?: (id: string) => boolean;
+	onKilled: (session: WorkspaceSession) => void;
+	onOpenSession: (sessionId: string) => void;
+}) {
+	const orderKey = `workspace-folders:${projectKey}:${parentPath}`;
+	const [order, setOrder] = useState(() => readSidebarCustomOrder(orderKey));
+	useEffect(() => setOrder(readSidebarCustomOrder(orderKey)), [orderKey]);
+	const orderedNodes = useMemo(() => applyOrder(nodes, (node) => node.path, order, "end"), [nodes, order]);
+	const ids = useMemo(() => orderedNodes.map((node) => node.path), [orderedNodes]);
+	const sensors = useReorderSensors();
+	const dragClickGuard = usePostDragClickGuard();
+	const onDragEnd = useCallback(({ active, over }: DragEndEvent) => {
+		const activeId = String(active.id);
+		dragClickGuard.markDragEnded(activeId);
+		if (!over) return;
+		const next = reorderWorkspaceItems(ids, activeId, String(over.id));
+		if (!next) return;
+		setOrder(next);
+		writeSidebarCustomOrder(orderKey, next);
+	}, [dragClickGuard, ids, orderKey]);
+
+	return (
+		<DndContext
+			collisionDetection={closestCenter}
+			modifiers={[restrictToListBounds]}
+			id={sessionDndId(`${projectKey}:workspace-folders:${parentPath}`)}
+			onDragEnd={onDragEnd}
+			sensors={sensors}
+		>
+			<SortableContext items={ids} strategy={verticalListSortingStrategy}>
+				{orderedNodes.map((node) => (
+					<WorkspaceFolderBranch
+						key={node.path}
+						workspace={workspace}
+						allSessions={allSessions}
+						node={node}
+						sessions={node.repo
+							? allSessions.filter((session) => sessionMatchesWorkspaceFolder(
+								session,
+								node.path,
+								workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS,
+							))
+							: []}
+						selection={selection}
+						projectDragInProgress={projectDragInProgress}
+						projectKey={projectKey}
+						consumeDragClick={dragClickGuard.consumeClick}
+						onKilled={onKilled}
+						onOpenSession={onOpenSession}
+					/>
+				))}
+			</SortableContext>
+		</DndContext>
+	);
+}
+
+type WorkspaceFolderBranchProps = {
+	workspace: WorkspaceSummary;
+	node: WorkspaceFolderTreeNode;
+	allSessions: WorkspaceSession[];
+	sessions: WorkspaceSession[];
+	selection: Selection;
+	projectDragInProgress: boolean;
+	projectKey: string;
+	consumeDragClick: (id: string) => boolean;
+	onKilled: (session: WorkspaceSession) => void;
+	onOpenSession: (sessionId: string) => void;
+};
+
+const WorkspaceFolderBranch = memo(function WorkspaceFolderBranch({
+	workspace,
+	node,
+	allSessions,
+	sessions,
+	selection,
+	projectDragInProgress,
+	projectKey,
+	consumeDragClick,
+	onKilled,
+	onOpenSession,
+}: WorkspaceFolderBranchProps) {
+	const { t } = useTranslation();
+	const requestNewTask = useUiStore((state) => state.requestNewTask);
+	const [collapsed, setCollapsed] = useState(false);
+	const chatOrderKey = `workspace-chats:${projectKey}:${node.path}`;
+	const [chatOrder, setChatOrder] = useState(() => readSidebarCustomOrder(chatOrderKey));
+	useEffect(() => setChatOrder(readSidebarCustomOrder(chatOrderKey)), [chatOrderKey]);
+	const orderedSessions = useMemo(
+		() => applyOrder(sessions, (session) => session.id, chatOrder, "end"),
+		[chatOrder, sessions],
+	);
+	const { listed, remaining, showMore } = useProgressiveShowMore(orderedSessions);
+	const sessionIds = useMemo(() => listed.map((session) => session.id), [listed]);
+	const commitChatOrder = useCallback((next: string[] | null) => {
+		if (!next) return;
+		const listedIds = new Set(next);
+		const fullOrder = [...next, ...orderedSessions.filter((session) => !listedIds.has(session.id)).map((session) => session.id)];
+		setChatOrder(fullOrder);
+		writeSidebarCustomOrder(chatOrderKey, fullOrder);
+	}, [chatOrderKey, orderedSessions]);
+	const toggle = () => {
+		if (consumeDragClick(node.path)) return;
+		setCollapsed((value) => !value);
+	};
+	const sortable = useSortable({ id: node.path, disabled: projectDragInProgress });
+
+	return (
+		<div ref={sortable.setNodeRef} style={sortableRowStyle(sortable)} className={cn("relative mt-0.5", sortable.isDragging && "z-10 opacity-70")} data-workspace-folder-branch={node.path}>
+			<div className="group/nav-row group/folder-row relative flex min-h-7.5 w-full items-center">
+				<SidebarMenuButton
+					ref={sortable.setActivatorNodeRef}
+					{...sortable.listeners}
+					aria-label={`${node.name} · ${workspace.name}`}
+					aria-expanded={!collapsed}
+					tooltip={node.path}
+					onClick={toggle}
+					title={node.name}
+					className={cn(
+						NAV_ROW_CLASS,
+						NAV_ROW_HIGHLIGHT_HOST_CLASS,
+						"min-h-7.5 h-auto py-1 pl-4 pr-8 text-left text-xs font-medium text-muted-foreground hover:text-foreground",
+					)}
+				>
+					<span aria-hidden="true" className="relative z-[1] inline-flex size-4 shrink-0 items-center justify-center mr-0.5">
+						<ChevronRight className={cn("size-3 transition-transform duration-150", !collapsed && "rotate-90")} />
+					</span>
+					<Folder className="relative z-[1] mr-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+					<span className="relative z-[1] min-w-0 flex-1 whitespace-normal break-words" data-folder-name="">
+						{node.name}
+					</span>
+				</SidebarMenuButton>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							size="icon-xs"
+							variant="quiet"
+							aria-label={`${t("shell.newTask")} · ${node.name}`}
+							className={cn(
+								HOVER_ACTION_CLASS,
+								"sidebar-expanded-chrome z-chrome absolute right-2 top-1/2 size-5 -translate-y-1/2 p-0 opacity-0 group-hover/folder-row:opacity-100 group-focus-within/folder-row:opacity-100",
+							)}
+							onClick={(event) => {
+								event.stopPropagation();
+								requestNewTask(workspace.id, workspace.hostId, { folder: node.path });
+							}}
+							type="button"
+						>
+							<Plus className="size-3" aria-hidden="true" />
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent>{t("shell.newTask")}</TooltipContent>
+				</Tooltip>
+			</div>
+			{!collapsed && (
+				<div className="pl-3.5">
+					{node.repo && sessions.length > 0 && (
+						<div className="relative">
+							<SessionReorderList
+								dndId={sessionDndId(`${workspace.id}-${node.path}`)}
+								testId={`session-list-${workspace.id}-${node.path}`}
+								className="mx-0 ml-3 translate-x-0 gap-px border-l-0 px-0 pt-0.5 pb-0"
+								sessions={listed}
+								repos={[node.repo]}
+								sessionIds={sessionIds}
+								activeSessionId={selection.activeSessionId}
+								plain={projectDragInProgress}
+								onReorder={commitChatOrder}
+								onKilled={onKilled}
+								onOpen={onOpenSession}
+							/>
+							{remaining > 0 && (
+								<ShowMoreRow
+									className="absolute inset-x-0 bottom-0 z-20 h-5 bg-sidebar/75 px-3 backdrop-blur-[2px] shadow-sm"
+									expanded={false}
+									label={t("shell.showMore")}
+									onClick={showMore}
+								/>
+							)}
+						</div>
+					)}
+					<WorkspaceFolderBranchList
+						workspace={workspace}
+						nodes={node.children}
+						parentPath={node.path}
+						projectKey={projectKey}
+						allSessions={allSessions}
+						selection={selection}
+						projectDragInProgress={projectDragInProgress}
+						consumeDragClick={consumeDragClick}
+						onKilled={onKilled}
+						onOpenSession={onOpenSession}
+					/>
+				</div>
+			)}
+		</div>
+	);
+});
+
 const ProjectItem = memo(function ProjectItem({
 	workspace,
 	avatarUrl,
@@ -1565,6 +1852,7 @@ const ProjectItem = memo(function ProjectItem({
 	const { t } = useTranslation();
 	const nameWithHost = hostLabel ? `${workspace.name} · ${hostLabel}` : workspace.name;
 	const isStandalone = workspace.id === STANDALONE_WORKSPACE_ID;
+	const isMultiFolder = !isStandalone && (workspace.workspaceRepos?.length ?? 0) > 0;
 	// A Cloud standalone agent (here, one shared with the person) is one
 	// session: it has no board, orchestrator or project settings to offer.
 	const isAgent = workspace.standaloneAgent === true;
@@ -1572,12 +1860,12 @@ const ProjectItem = memo(function ProjectItem({
 	const activeProjectMatches = selection.activeProjectId === workspace.id;
 	const projectHeaderRef = useRef<HTMLDivElement>(null);
 	const projectSessionsRef = useRef<HTMLDivElement>(null);
-	const dashboardActive = activeProjectMatches && !selection.activeSessionId;
+	const dashboardActive = activeProjectMatches && !selection.activeSessionId && !selection.activeFolder;
+	const orchestrator = newestActiveOrchestrator(workspace.sessions, "");
 	const orchestratorActive =
 		activeProjectMatches &&
-		workspace.sessions.some(
-			(session) => session.id === selection.activeSessionId && session.kind === "orchestrator",
-		);
+		orchestrator !== undefined &&
+		selection.activeSessionId === orchestrator.id;
 
 	const queryClient = useQueryClient();
 	const [confirmOpen, setConfirmOpen] = useState(false);
@@ -1622,10 +1910,16 @@ const ProjectItem = memo(function ProjectItem({
 		},
 		[sessionOrder, visibleSessions],
 	);
-	const [folderFilter, setFolderFilter] = useState("all");
-	const folderSessions = useMemo(
-		() => filterSessionsByFolder(sessions, folderFilter, workspace.workspaceRepos ?? []),
-		[folderFilter, sessions, workspace.workspaceRepos],
+	const rootSessions = useMemo(
+		() => (isMultiFolder ? sessions.filter((session) => !workspaceFolderRepoForSession(session, workspace.workspaceRepos)) : sessions),
+		[isMultiFolder, sessions, workspace.workspaceRepos],
+	);
+	const generalCap = useProgressiveShowMore(rootSessions);
+	const generalSessionIds = useStableArray(useMemo(() => generalCap.listed.map((session) => session.id), [generalCap.listed]));
+	const [generalOpen, setGeneralOpen] = useState(true);
+	const workspaceFolderTree = useMemo(
+		() => buildWorkspaceFolderTree(workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS),
+		[workspace.workspaceRepos],
 	);
 	// Publish the order shown here so keyboard navigation follows it.
 	useEffect(() => {
@@ -1638,7 +1932,7 @@ const ProjectItem = memo(function ProjectItem({
 		hiddenCount: hiddenSessionCount,
 		showAll: showAllSessions,
 		toggleShowAll: toggleShowAllSessions,
-	} = useShowMoreCap(folderSessions, SIDEBAR_PROJECT_SESSION_LIMIT, selection.activeSessionId);
+	} = useShowMoreCap(rootSessions, SIDEBAR_PROJECT_SESSION_LIMIT, selection.activeSessionId);
 	useLayoutEffect(() => {
 		const header = projectHeaderRef.current;
 		const content = projectSessionsRef.current;
@@ -2211,7 +2505,7 @@ const ProjectItem = memo(function ProjectItem({
 					{/* project-sidebar__sessions: indented under the project parent so worker
           sessions read as children without adding a persistent guide rail. */}
 		<AnimatePresence initial={false}>
-			{expanded && sessions.length > 0 && (
+			{expanded && (sessions.length > 0 || isMultiFolder) && (
 				<motion.div
 					key="sessions"
 					ref={projectSessionsRef}
@@ -2235,45 +2529,88 @@ const ProjectItem = memo(function ProjectItem({
 						exit={{ y: -12, opacity: 0 }}
 						transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }}
 					>
-						{workspace.workspaceRepos?.length ? <label className="flex items-center gap-2 px-4 pt-1 text-2xs text-muted-foreground">
-							<span>{t("shell.folderFilter", { defaultValue: "Folder" })}</span>
-							<select aria-label={t("shell.folderFilter", { defaultValue: "Folder" })} className="h-6 min-w-0 flex-1 rounded border border-sidebar-border bg-sidebar px-1.5 text-sidebar-foreground" value={folderFilter} onChange={(event) => setFolderFilter(event.target.value)}>
-								<option value="all">{t("shell.allFolders", { defaultValue: "All folders" })}</option>
-								<option value="__workspace_wide__">{t("shell.workspaceWide", { defaultValue: "Workspace-wide" })}</option>
-								{workspace.workspaceRepos.map((repo) => <option key={repo.relativePath} value={repo.relativePath}>{repo.name}</option>)}
-							</select>
-						</label> : null}
-											<SessionReorderList
-										dndId={sessionDndId(projectKey)}
-										testId={`session-list-${projectKey}`}
-												className={cn(
-													"mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1",
-													hiddenSessionCount > 0 ? "pb-px" : "pb-1",
-												)}
-												sessions={listedSessions}
-												repos={workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS}
-												sessionIds={listedSessionIds}
-												activeSessionId={selection.activeSessionId}
-												plain={projectDragInProgress}
-												onReorder={commitSessionOrder}
-												onKilled={handleSessionKilled}
-												onOpen={openSession}
-											/>
-											{hiddenSessionCount > 0 ? (
-												// Indented to the session list so its label starts on the status-dot column.
-												<div className="pl-4">
-													<ShowMoreRow
-														className="px-3"
-														expanded={showAllSessions}
-														label={
-															showAllSessions
-																? t("shell.showLessAgents")
-																: t("shell.showMoreAgents", { count: hiddenSessionCount })
-														}
-														onClick={toggleShowAllSessions}
-													/>
-												</div>
-											) : null}
+						{isMultiFolder ? (
+							<>
+								{rootSessions.length > 0 && (
+									<SectionDisclosure
+										label="General"
+										open={generalOpen}
+										onToggle={() => setGeneralOpen((open) => !open)}
+										className="mb-0.5"
+									/>
+								)}
+								{generalOpen && rootSessions.length > 0 && (
+									<div className="relative">
+									<SessionReorderList
+										dndId={sessionDndId(`${projectKey}-root`)}
+										testId={`session-list-${projectKey}-root`}
+										className="mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1 pb-1"
+										sessions={generalCap.listed}
+										repos={workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS}
+										sessionIds={generalSessionIds}
+										activeSessionId={selection.activeSessionId}
+										plain={projectDragInProgress}
+										onReorder={commitSessionOrder}
+										onKilled={handleSessionKilled}
+										onOpen={openSession}
+									/>
+										{generalCap.remaining > 0 && (
+										<ShowMoreRow
+											className="absolute inset-x-0 bottom-0 z-20 h-5 bg-sidebar/75 px-3 backdrop-blur-[2px] shadow-sm"
+											expanded={false}
+											label={t("shell.showMore")}
+											onClick={generalCap.showMore}
+										/>
+										)}
+									</div>
+								)}
+							<WorkspaceFolderBranchList
+								workspace={workspace}
+								nodes={workspaceFolderTree}
+								parentPath="."
+								projectKey={projectKey}
+								allSessions={sessions}
+								selection={selection}
+								projectDragInProgress={projectDragInProgress}
+								onKilled={handleSessionKilled}
+								onOpenSession={openSession}
+							/>
+							</>
+						) : (
+							<>
+								<SessionReorderList
+									dndId={sessionDndId(projectKey)}
+									testId={`session-list-${projectKey}`}
+									className={cn(
+										"mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1",
+										hiddenSessionCount > 0 ? "pb-px" : "pb-1",
+									)}
+									sessions={listedSessions}
+									repos={workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS}
+									sessionIds={listedSessionIds}
+									activeSessionId={selection.activeSessionId}
+									plain={projectDragInProgress}
+									onReorder={commitSessionOrder}
+									onKilled={handleSessionKilled}
+									onOpen={openSession}
+								/>
+								{hiddenSessionCount > 0 ? (
+									// Indented to the session list so its label starts on the status-dot column.
+									<div className="pl-4">
+										<ShowMoreRow
+											className="px-3"
+											expanded={showAllSessions}
+											label={
+												showAllSessions
+													? t("shell.showLessAgents")
+													: t("shell.showMoreAgents", { count: hiddenSessionCount })
+											}
+											onClick={toggleShowAllSessions}
+										/>
+									</div>
+								) : null}
+							</>
+						)}
 								</motion.div>
 							</div>
 							</motion.div>
@@ -2982,7 +3319,6 @@ const SessionRow = memo(function SessionRow({
 									{session.title}
 								</span>
 								{hostLabel ? <Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs"><span className="truncate">{hostLabel}</span></Badge> : null}
-								<WorkspaceFolderMarker session={session} repos={repos ?? []} />
 							</span>
 						</Pressable>
 					</div>

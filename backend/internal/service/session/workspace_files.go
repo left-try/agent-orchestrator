@@ -282,6 +282,7 @@ func (s *Service) WorkspaceWatchPaths(ctx context.Context, id domain.SessionID) 
 // Callers sharing an in-flight load may still receive its uncached snapshot;
 // the first request after that load completes recomputes the data.
 func (s *Service) InvalidateWorkspaceCache(id domain.SessionID) {
+	s.invalidateWorkspaceFolderCache(id)
 	s.workspaceCache.invalidateSession(id)
 	if s.workspaceManifests.markStale(id) {
 		s.refreshWorkspaceManifestInBackground(id)

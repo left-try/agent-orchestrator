@@ -4936,4 +4936,117 @@ describe("Memoized Sidebar with unchanged props", () => {
 			expect(pinnedRow()).toBeInTheDocument();
 		});
 	});
+
+	describe("multi-folder workspace sidebar", () => {
+		it("renders folders directly inside the workspace with nested chats, no folder filter dropdown, and no folder markers on chat names", async () => {
+			const rootTask: WorkspaceSession = {
+				...session,
+				id: "root-task",
+				title: "Root workspace task",
+			};
+			const apiTask: WorkspaceSession = {
+				...session,
+				id: "api-task",
+				title: "Fix API endpoints",
+				workspaceFolder: "services/api",
+			};
+			const webTask: WorkspaceSession = {
+				...session,
+				id: "web-task",
+				title: "Fix web dashboard",
+				workspaceFolder: "apps/web",
+			};
+			const multiFolderWorkspace: WorkspaceSummary = {
+				id: "mf-workspace",
+				name: "Mono Repo",
+				path: "/repo/mono",
+				kind: "workspace",
+				workspaceRepos: [
+					{ name: "api", relativePath: "services/api", repo: "acme/api" },
+					{ name: "web", relativePath: "apps/web", repo: "acme/web" },
+				],
+				sessions: [rootTask, apiTask, webTask],
+			};
+
+			renderSidebar({ workspaces: [multiFolderWorkspace] });
+
+			// Unassigned workspace chats sit inside a plain General dropdown.
+			expect(screen.getByText("Root workspace task")).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "General" })).toBeInTheDocument();
+
+			// No folder filter dropdown
+			expect(screen.queryByLabelText("Folder")).not.toBeInTheDocument();
+
+			// Nested folder paths render as a hierarchy.
+			expect(screen.getByRole("button", { name: "services · Mono Repo" })).toBeInTheDocument();
+			const apiBranch = screen.getByRole("button", { name: "api · Mono Repo" });
+			const webBranch = screen.getByRole("button", { name: "web · Mono Repo" });
+			expect(apiBranch).toBeInTheDocument();
+			expect(webBranch).toBeInTheDocument();
+
+			// Nested sessions visible inside their folders
+			expect(screen.getByText("Fix API endpoints")).toBeInTheDocument();
+			expect(screen.getByText("Fix web dashboard")).toBeInTheDocument();
+
+			// No folder markers rendered on chat rows
+			expect(document.querySelector("[data-workspace-folder]")).not.toBeInTheDocument();
+
+			// Folder rows only expand/collapse; the project board remains project-wide.
+			fireEvent.click(apiBranch);
+			expect(navigateMock).not.toHaveBeenCalledWith(expect.objectContaining({ search: { folder: "services/api" } }));
+		});
+
+		it("folder actions create a task for that folder without adding a folder orchestrator", async () => {
+			const multiFolderWorkspace: WorkspaceSummary = {
+				id: "mf-workspace",
+				name: "Mono Repo",
+				path: "/repo/mono",
+				kind: "workspace",
+				workspaceRepos: [
+					{ name: "api", relativePath: "services/api", repo: "acme/api" },
+				],
+				sessions: [],
+			};
+
+			renderSidebar({ workspaces: [multiFolderWorkspace] });
+
+			// Find folder branch container
+			const branch = document.querySelector('[data-workspace-folder-branch="services/api"]');
+			expect(branch).toBeInTheDocument();
+
+			// Click folder + button -> requests new task with folder option
+			const newTaskBtn = within(branch as HTMLElement).getByRole("button", { name: /New task/ });
+			fireEvent.click(newTaskBtn);
+			expect(useUiStore.getState().newTaskRequest?.folder).toBe("services/api");
+			expect(useUiStore.getState().newTaskRequest?.projectId).toBe("mf-workspace");
+
+			expect(within(branch as HTMLElement).queryByRole("button", { name: /orchestrator/i })).not.toBeInTheDocument();
+		});
+
+		it("reveals five folder chats first, then ten and twenty on successive clicks", async () => {
+			const folderChats = Array.from({ length: 26 }, (_, index) => ({
+				...session,
+				id: `folder-chat-${index + 1}`,
+				title: `Folder chat ${index + 1}`,
+				workspaceFolder: "services/api",
+			}));
+			const multiFolderWorkspace: WorkspaceSummary = {
+				id: "mf-workspace",
+				name: "Mono Repo",
+				path: "/repo/mono",
+				kind: "workspace",
+				workspaceRepos: [{ name: "api", relativePath: "services/api", repo: "acme/api" }],
+				sessions: folderChats,
+			};
+			renderSidebar({ workspaces: [multiFolderWorkspace] });
+			expect(screen.getByText("Folder chat 5")).toBeInTheDocument();
+			expect(screen.getByText("Folder chat 6")).toBeInTheDocument(); // dimmed under Show more
+			await userEvent.click(screen.getByRole("button", { name: /^Show more/ }));
+			expect(screen.getByText("Folder chat 15")).toBeInTheDocument();
+			expect(screen.getByText("Folder chat 16")).toBeInTheDocument(); // next partially covered row
+			await userEvent.click(screen.getByRole("button", { name: /^Show more/ }));
+			expect(screen.getByText("Folder chat 26")).toBeInTheDocument();
+		});
+	});
 });
+

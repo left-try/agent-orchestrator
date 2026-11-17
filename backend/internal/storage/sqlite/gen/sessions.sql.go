@@ -56,6 +56,25 @@ func (q *Queries) ActivateConversationBranchSession(ctx context.Context, arg Act
 	return result.RowsAffected()
 }
 
+const backfillSessionWorkspaceFolder = `-- name: BackfillSessionWorkspaceFolder :execrows
+UPDATE sessions
+SET workspace_folder = ?1
+WHERE id = ?2 AND workspace_folder = ''
+`
+
+type BackfillSessionWorkspaceFolderParams struct {
+	WorkspaceFolder string
+	ID              domain.SessionID
+}
+
+func (q *Queries) BackfillSessionWorkspaceFolder(ctx context.Context, arg BackfillSessionWorkspaceFolderParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, backfillSessionWorkspaceFolder, arg.WorkspaceFolder, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const claimChatControllerGeneration = `-- name: ClaimChatControllerGeneration :execrows
 UPDATE sessions
 SET controller_generation = ?
@@ -214,7 +233,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
     created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
-    workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
+    workspace_repo_path, workspace_folder, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
@@ -259,6 +278,7 @@ type GetSessionRow struct {
 	CleanupGeneration                int64
 	RuntimeLaunchID                  string
 	WorkspaceRepoPath                string
+	WorkspaceFolder                  string
 	TerminateOnPRMerge               bool
 	DiffBaseSha                      string
 	DiffBaseRef                      string
@@ -345,6 +365,7 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.CleanupGeneration,
 		&i.RuntimeLaunchID,
 		&i.WorkspaceRepoPath,
+		&i.WorkspaceFolder,
 		&i.TerminateOnPRMerge,
 		&i.DiffBaseSha,
 		&i.DiffBaseRef,
@@ -408,7 +429,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
     created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
-    workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
+    workspace_repo_path, workspace_folder, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
@@ -453,6 +474,7 @@ type GetSessionByAutomationRunIDRow struct {
 	CleanupGeneration                int64
 	RuntimeLaunchID                  string
 	WorkspaceRepoPath                string
+	WorkspaceFolder                  string
 	TerminateOnPRMerge               bool
 	DiffBaseSha                      string
 	DiffBaseRef                      string
@@ -539,6 +561,7 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.CleanupGeneration,
 		&i.RuntimeLaunchID,
 		&i.WorkspaceRepoPath,
+		&i.WorkspaceFolder,
 		&i.TerminateOnPRMerge,
 		&i.DiffBaseSha,
 		&i.DiffBaseRef,
@@ -611,7 +634,7 @@ const insertSession = `-- name: InsertSession :exec
 INSERT INTO sessions (
     id, project_id, num, issue_id, kind, harness, reviewer_harness, reviewer_agent_config, auto_review_enabled, display_name,
     activity_state, activity_last_at, first_signal_at, is_terminated,
-    branch, workspace_path, workspace_repo_path, diff_base_sha, diff_base_ref, runtime_handle_id,
+    branch, workspace_path, workspace_repo_path, workspace_folder, diff_base_sha, diff_base_ref, runtime_handle_id,
     runtime_launch_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
     latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
@@ -631,7 +654,7 @@ INSERT INTO sessions (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-    ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?
 )
 `
 
@@ -653,6 +676,7 @@ type InsertSessionParams struct {
 	Branch                           string
 	WorkspacePath                    string
 	WorkspaceRepoPath                string
+	WorkspaceFolder                  string
 	DiffBaseSha                      string
 	DiffBaseRef                      string
 	RuntimeHandleID                  string
@@ -722,6 +746,7 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) er
 		arg.Branch,
 		arg.WorkspacePath,
 		arg.WorkspaceRepoPath,
+		arg.WorkspaceFolder,
 		arg.DiffBaseSha,
 		arg.DiffBaseRef,
 		arg.RuntimeHandleID,
@@ -780,7 +805,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
     created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
-    workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
+    workspace_repo_path, workspace_folder, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
@@ -825,6 +850,7 @@ type ListAllSessionsRow struct {
 	CleanupGeneration                int64
 	RuntimeLaunchID                  string
 	WorkspaceRepoPath                string
+	WorkspaceFolder                  string
 	TerminateOnPRMerge               bool
 	DiffBaseSha                      string
 	DiffBaseRef                      string
@@ -917,6 +943,7 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.CleanupGeneration,
 			&i.RuntimeLaunchID,
 			&i.WorkspaceRepoPath,
+			&i.WorkspaceFolder,
 			&i.TerminateOnPRMerge,
 			&i.DiffBaseSha,
 			&i.DiffBaseRef,
@@ -1078,7 +1105,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
     created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
-    workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
+    workspace_repo_path, workspace_folder, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
@@ -1123,6 +1150,7 @@ type ListSessionsByProjectRow struct {
 	CleanupGeneration                int64
 	RuntimeLaunchID                  string
 	WorkspaceRepoPath                string
+	WorkspaceFolder                  string
 	TerminateOnPRMerge               bool
 	DiffBaseSha                      string
 	DiffBaseRef                      string
@@ -1215,6 +1243,7 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.CleanupGeneration,
 			&i.RuntimeLaunchID,
 			&i.WorkspaceRepoPath,
+			&i.WorkspaceFolder,
 			&i.TerminateOnPRMerge,
 			&i.DiffBaseSha,
 			&i.DiffBaseRef,
@@ -1471,21 +1500,22 @@ UPDATE sessions SET
     activity_state = ?7,
     activity_last_at = ?8,
     is_terminated = 0,
-    session_mode = ?9,
-    model = ?10,
-    effort = ?11,
-    session_permissions = ?12,
-    requested_output = ?13,
-    created_at = ?14,
-    updated_at = ?15,
-    auto_inject_review = ?16,
-    auto_inject_ci = ?17,
-    provision_state = ?18,
+    workspace_folder = ?9,
+    session_mode = ?10,
+    model = ?11,
+    effort = ?12,
+    session_permissions = ?13,
+    requested_output = ?14,
+    created_at = ?15,
+    updated_at = ?16,
+    auto_inject_review = ?17,
+    auto_inject_ci = ?18,
+    provision_state = ?19,
     provision_error = '',
-    client_request_id = ?19,
-    client_request_hash = ?20,
+    client_request_id = ?20,
+    client_request_hash = ?21,
     is_task_preparation = 0
-WHERE id = ?21 AND is_task_preparation = 1
+WHERE id = ?22 AND is_task_preparation = 1
 `
 
 type PromoteTaskPreparationParams struct {
@@ -1497,6 +1527,7 @@ type PromoteTaskPreparationParams struct {
 	DisplayNameExplicit bool
 	ActivityState       domain.ActivityState
 	ActivityLastAt      time.Time
+	WorkspaceFolder     string
 	SessionMode         domain.SessionMode
 	Model               string
 	Effort              string
@@ -1524,6 +1555,7 @@ func (q *Queries) PromoteTaskPreparation(ctx context.Context, arg PromoteTaskPre
 		arg.DisplayNameExplicit,
 		arg.ActivityState,
 		arg.ActivityLastAt,
+		arg.WorkspaceFolder,
 		arg.SessionMode,
 		arg.Model,
 		arg.Effort,
@@ -2214,7 +2246,7 @@ const updateSession = `-- name: UpdateSession :exec
 UPDATE sessions SET
     issue_id = ?, kind = ?, harness = ?, reviewer_harness = ?, reviewer_agent_config = ?, auto_review_enabled = ?,
     activity_state = ?, activity_last_at = ?, first_signal_at = ?, is_terminated = ?,
-    branch = CASE WHEN temporary_branch <> '' AND temporary_branch = ? THEN branch ELSE ? END, workspace_path = ?, workspace_repo_path = ?, diff_base_sha = ?, diff_base_ref = ?, runtime_handle_id = ?,
+    branch = CASE WHEN temporary_branch <> '' AND temporary_branch = ? THEN branch ELSE ? END, workspace_path = ?, workspace_repo_path = ?, workspace_folder = ?, diff_base_sha = ?, diff_base_ref = ?, runtime_handle_id = ?,
     runtime_launch_id = ?, agent_session_id = ?, agent_session_id_launch_id = ?, native_identity_observed_at = ?, prompt = ?,
     latest_user_prompt = ?, latest_user_prompt_at = ?, latest_assistant_update = ?, latest_assistant_update_at = ?,
     conversation_checkpoint_state = ?, conversation_checkpoint_generation = ?, conversation_checkpoint_native_id = ?,
@@ -2243,6 +2275,7 @@ type UpdateSessionParams struct {
 	Branch                           string
 	WorkspacePath                    string
 	WorkspaceRepoPath                string
+	WorkspaceFolder                  string
 	DiffBaseSha                      string
 	DiffBaseRef                      string
 	RuntimeHandleID                  string
@@ -2298,6 +2331,7 @@ func (q *Queries) UpdateSession(ctx context.Context, arg UpdateSessionParams) er
 		arg.Branch,
 		arg.WorkspacePath,
 		arg.WorkspaceRepoPath,
+		arg.WorkspaceFolder,
 		arg.DiffBaseSha,
 		arg.DiffBaseRef,
 		arg.RuntimeHandleID,

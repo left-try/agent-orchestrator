@@ -84,6 +84,7 @@ export function SessionTopbarActions({
 		projectId: supportsProjectActions ? projectId : undefined,
 		project: supportsProjectActions ? project : undefined,
 		orchestrator: supportsProjectActions ? orchestrator : undefined,
+		folder: session?.workspaceFolder,
 		source: "topbar",
 		sessionId: currentSessionId,
 		hostId,
@@ -111,7 +112,7 @@ export function SessionTopbarActions({
 	const view = isOrchestrator ? "orchestrator" : "worker";
 	const openBoard = () => {
 		captureTopbarAction("open_board", view);
-		void navigate(projectId ? projectNavigateTarget(projectId, hostId) : { to: "/" });
+		void navigate(projectId ? projectNavigateTarget(projectId, hostId, session?.workspaceFolder) : { to: "/" });
 	};
 	const archiveTarget = !isOrchestrator && session && !session.cloud && sessionIsActive(session) ? session : undefined;
 

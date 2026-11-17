@@ -7,10 +7,10 @@
 
 -- name: InsertConversation :exec
 INSERT INTO conversations (
-    id, scope, project_id, session_id, current_session_id, latest_sequence,
+    id, scope, project_id, workspace_folder, session_id, current_session_id, latest_sequence,
     active_branch_id, created_at, updated_at
 )
-VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?);
+VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?);
 
 -- name: InsertReviewConversation :exec
 INSERT INTO conversations (id, scope, project_id, review_id, current_review_id, latest_sequence, active_branch_id, created_at, updated_at)
@@ -139,7 +139,31 @@ WHERE conversation_activities.provider_item_id = ?
 LIMIT 1;
 
 -- name: SelectProjectConversation :one
-SELECT * FROM conversations WHERE project_id = ? AND scope = 'project' LIMIT 1;
+SELECT * FROM conversations WHERE project_id = ? AND scope = 'project' AND workspace_folder = ? LIMIT 1;
+
+-- name: ListSessionTurnDiffs :many
+WITH wanted AS (
+    SELECT CAST(j.value AS TEXT) AS session_id
+    FROM json_each(?) AS j
+)
+SELECT w.session_id, t.diff_json
+FROM wanted AS w
+JOIN conversation_turns AS t
+  ON (
+      t.handled_by_session_id = w.session_id
+      OR (
+          t.handled_by_session_id IS NULL
+          AND EXISTS (
+              SELECT 1 FROM conversations AS c
+              WHERE c.id = t.conversation_id
+                AND c.scope = 'session'
+                AND (c.session_id = w.session_id OR c.current_session_id = w.session_id)
+          )
+      )
+  )
+WHERE t.diff_json <> ''
+  AND t.rolled_back_at IS NULL
+ORDER BY t.rowid;
 
 -- name: BindProjectConversationSession :exec
 UPDATE conversations SET current_session_id = ?, updated_at = ?

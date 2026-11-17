@@ -152,18 +152,18 @@ import { SessionsBoard } from "./SessionsBoard";
 import { latestSessionArtifacts, toBoardSessionPresentation } from "./SessionsBoardAdapters";
 import { TooltipProvider } from "./ui/tooltip";
 
-function renderBoard(projectId?: string) {
+function renderBoard(projectId?: string, folder?: string) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	renderBoardWithClient(queryClient, projectId);
+	renderBoardWithClient(queryClient, projectId, folder);
 	return queryClient;
 }
 
 /** The board with the shell's archive modal host beside it, as the app mounts them. */
-function renderBoardWithClient(queryClient: QueryClient, projectId?: string) {
+function renderBoardWithClient(queryClient: QueryClient, projectId?: string, folder?: string) {
 	return render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
-				<SessionsBoard projectId={projectId} />
+				<SessionsBoard projectId={projectId} folder={folder} />
 				<ArchiveModalHost />
 			</TooltipProvider>
 		</QueryClientProvider>,
@@ -191,7 +191,7 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
-	it("filters workspace tasks by their explicit child folder and shows the folder marker", () => {
+	it("renders main board without folder filter dropdown or card folder markers, and renders folder board when folder prop is provided", () => {
 		const assigned = boardSession({ id: "api-task", title: "Fix API", status: "working", workspaceFolder: "services/api" });
 		const wide = boardSession({ id: "wide-task", title: "Workspace-wide task", status: "working" });
 		const workspace = {
@@ -200,66 +200,22 @@ describe("SessionsBoard", () => {
 			workspaceRepos: [{ name: "api", relativePath: "services/api", repo: "acme/api" }],
 		};
 		workspaceQueryMock.mockReturnValue({ data: [workspace], isSuccess: true });
-		renderBoard("p1");
-		expect(document.querySelector('[data-workspace-folder="services/api"]')).toBeInTheDocument();
-		const filter = screen.getByLabelText("Folder");
-		fireEvent.change(filter, { target: { value: "services/api" } });
+
+		// Main board: shows all tasks, no folder dropdown, no folder marker
+		const { unmount } = renderBoardWithClient(new QueryClient({ defaultOptions: { queries: { retry: false } } }), "p1");
+		expect(screen.queryByLabelText("Folder")).not.toBeInTheDocument();
+		expect(document.querySelector("[data-workspace-folder]")).not.toBeInTheDocument();
+		expect(screen.getByText("Fix API")).toBeInTheDocument();
+		expect(screen.getByText("Workspace-wide task")).toBeInTheDocument();
+		unmount();
+
+		// Folder board: scoped to folder tasks and shows folder label in topbar
+		renderBoard("p1", "services/api");
+		expect(screen.queryByLabelText("Folder")).not.toBeInTheDocument();
+		expect(document.querySelector("[data-workspace-folder]")).not.toBeInTheDocument();
 		expect(screen.getByText("Fix API")).toBeInTheDocument();
 		expect(screen.queryByText("Workspace-wide task")).not.toBeInTheDocument();
-		fireEvent.change(filter, { target: { value: "__workspace_wide__" } });
-		expect(screen.queryByText("Fix API")).not.toBeInTheDocument();
-		expect(screen.getByText("Workspace-wide task")).toBeInTheDocument();
-	});
-
-	it("keeps single-repo project tasks in the all-projects Workspace-wide filter", () => {
-		const assigned = boardSession({
-			id: "api-task",
-			title: "API folder task",
-			status: "working",
-			workspaceId: "workspace",
-			workspaceName: "Workspace",
-			workspaceFolder: "services/api",
-		});
-		const workspaceWide = boardSession({
-			id: "wide-task",
-			title: "Workspace-wide task",
-			status: "working",
-			workspaceId: "workspace",
-			workspaceName: "Workspace",
-		});
-		const singleRepoTask = boardSession({
-			id: "single-task",
-			title: "Single-repo task",
-			status: "working",
-			workspaceId: "single-repo",
-			workspaceName: "Single repo",
-		});
-		workspaceQueryMock.mockReturnValue({
-			data: [
-				{
-					...workspaceWithSessions([assigned, workspaceWide]),
-					id: "workspace",
-					name: "Workspace",
-					kind: "workspace" as const,
-					workspaceRepos: [{ name: "api", relativePath: "services/api", repo: "acme/api" }],
-				},
-				{
-					id: "single-repo",
-					name: "Single repo",
-					path: "/tmp/single-repo",
-					kind: "single_repo" as const,
-					sessions: [singleRepoTask],
-				},
-			],
-			isSuccess: true,
-		});
-		renderBoard();
-
-		fireEvent.change(screen.getByLabelText("Folder"), { target: { value: "__workspace_wide__" } });
-
-		expect(screen.getByText("Workspace-wide task")).toBeInTheDocument();
-		expect(screen.getByText("Single-repo task")).toBeInTheDocument();
-		expect(screen.queryByText("API folder task")).not.toBeInTheDocument();
+		expect(screen.getByTestId("board-topbar-label")).toHaveTextContent("api");
 	});
 
 	it("leaves a Cloud standalone agent's project for Home: it has no board", async () => {

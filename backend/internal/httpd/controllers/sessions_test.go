@@ -290,12 +290,16 @@ func (f *fakeSessionService) Spawn(_ context.Context, cfg ports.SpawnConfig) (do
 		return domain.Session{}, 0, 0, f.spawnErr
 	}
 	now := time.Now().UTC()
-	s := domain.Session{SessionRecord: domain.SessionRecord{ID: domain.SessionID(string(cfg.ProjectID) + "-2"), ProjectID: cfg.ProjectID, IssueID: cfg.IssueID, Kind: cfg.Kind, Harness: cfg.Harness, DisplayName: cfg.DisplayName, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}, AutoInjectReview: true, AutoInjectCI: true, CreatedAt: now, UpdatedAt: now}, Status: domain.StatusIdle}
+	s := domain.Session{SessionRecord: domain.SessionRecord{ID: domain.SessionID(string(cfg.ProjectID) + "-2"), ProjectID: cfg.ProjectID, IssueID: cfg.IssueID, Kind: cfg.Kind, Harness: cfg.Harness, DisplayName: cfg.DisplayName, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}, AutoInjectReview: true, AutoInjectCI: true, Metadata: domain.SessionMetadata{WorkspaceFolder: cfg.WorkspaceFolder}, CreatedAt: now, UpdatedAt: now}, Status: domain.StatusIdle}
 	f.sessions[s.ID] = s
 	return s, len(cfg.Prompt), 0, nil
 }
 
 func (f *fakeSessionService) SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, clean bool, requestedMode domain.SessionMode, approval domain.PermissionMode) (domain.Session, error) {
+	return f.SpawnOrchestratorForFolder(ctx, projectID, "", clean, requestedMode, approval)
+}
+
+func (f *fakeSessionService) SpawnOrchestratorForFolder(ctx context.Context, projectID domain.ProjectID, workspaceFolder string, clean bool, requestedMode domain.SessionMode, approval domain.PermissionMode) (domain.Session, error) {
 	f.orchestratorMode = requestedMode
 	f.orchestratorApproval = approval
 	if clean {
@@ -305,12 +309,15 @@ func (f *fakeSessionService) SpawnOrchestrator(ctx context.Context, projectID do
 			return domain.Session{}, err
 		}
 		for _, o := range existing {
+			if strings.TrimSpace(o.Metadata.WorkspaceFolder) != strings.TrimSpace(workspaceFolder) {
+				continue
+			}
 			if _, err := f.Kill(ctx, o.ID); err != nil {
 				return domain.Session{}, err
 			}
 		}
 	}
-	s, _, _, err := f.Spawn(ctx, ports.SpawnConfig{ProjectID: projectID, Kind: domain.KindOrchestrator, RequestedMode: requestedMode})
+	s, _, _, err := f.Spawn(ctx, ports.SpawnConfig{ProjectID: projectID, Kind: domain.KindOrchestrator, RequestedMode: requestedMode, WorkspaceFolder: workspaceFolder})
 	return s, err
 }
 

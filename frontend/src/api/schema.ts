@@ -8911,6 +8911,7 @@ export interface components {
             /** @enum {string} */
             mode?: "chat" | "tui";
             projectId: string;
+            workspaceFolder?: string;
         };
         SpawnOrchestratorResponse: {
             orchestrator: components["schemas"]["OrchestratorResponse"];
@@ -8942,6 +8943,7 @@ export interface components {
             requestedOutput?: "artifact";
             /** @enum {string} */
             trackerProvider?: "github" | "gitlab";
+            workspaceFolder?: string;
         };
         SpawnSessionResponse: {
             promptBytes: number;
