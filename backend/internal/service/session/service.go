@@ -969,14 +969,13 @@ func (s *Service) SpawnOrchestratorForFolder(
 }
 
 func (s *Service) validateWorkspaceFolder(ctx context.Context, project domain.ProjectRecord, folder string) (string, error) {
-	trimmed := strings.TrimSpace(folder)
-	if trimmed == "" {
+	if strings.TrimSpace(folder) == "" {
 		return "", nil
 	}
 	if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
 		return "", apierr.Invalid("INVALID_WORKSPACE_FOLDER", "workspaceFolder is only valid for workspace projects", nil)
 	}
-	cleaned := cleanWorkspaceFolderRel(trimmed)
+	cleaned := cleanWorkspaceFolderRel(folder)
 	if cleaned == "" {
 		return "", apierr.Invalid("INVALID_WORKSPACE_FOLDER", "Invalid workspace folder path", map[string]any{"workspaceFolder": folder})
 	}
@@ -992,7 +991,7 @@ func (s *Service) validateWorkspaceFolder(ctx context.Context, project domain.Pr
 			return rel, nil
 		}
 	}
-	return "", apierr.Invalid("INVALID_WORKSPACE_FOLDER", fmt.Sprintf("Unknown or unready workspace folder %q", trimmed), map[string]any{"workspaceFolder": folder})
+	return "", apierr.Invalid("INVALID_WORKSPACE_FOLDER", fmt.Sprintf("Unknown or unready workspace folder %q", folder), map[string]any{"workspaceFolder": folder})
 }
 
 func (s *Service) activeOrchestrators(ctx context.Context, projectID domain.ProjectID) ([]domain.Session, error) {

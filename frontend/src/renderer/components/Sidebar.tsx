@@ -61,7 +61,9 @@ import {
 import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { artifactCount, groupArtifactsByProject } from "../lib/artifacts";
-import { sessionMatchesWorkspaceFolder, workspaceFolderRepoForSession } from "../lib/workspace-folder";
+import { reorderWorkspaceItems, sessionMatchesWorkspaceFolder, workspaceFolderRepoForSession } from "../lib/workspace-folder";
+import { readSidebarCustomOrder, writeSidebarCustomOrder } from "../lib/sidebar-custom-order";
+import { applyOrder } from "../lib/sidebar-order";
 import {
 	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
@@ -1612,6 +1614,81 @@ function findWorkspaceFolderNode(nodes: WorkspaceFolderTreeNode[], path: string)
 	return undefined;
 }
 
+function WorkspaceFolderBranchList({
+	workspace,
+	nodes,
+	parentPath,
+	projectKey,
+	allSessions,
+	selection,
+	projectDragInProgress,
+	consumeDragClick = () => false,
+	onKilled,
+	onOpenSession,
+}: {
+	workspace: WorkspaceSummary;
+	nodes: WorkspaceFolderTreeNode[];
+	parentPath: string;
+	projectKey: string;
+	allSessions: WorkspaceSession[];
+	selection: Selection;
+	projectDragInProgress: boolean;
+	consumeDragClick?: (id: string) => boolean;
+	onKilled: (session: WorkspaceSession) => void;
+	onOpenSession: (sessionId: string) => void;
+}) {
+	const orderKey = `workspace-folders:${projectKey}:${parentPath}`;
+	const [order, setOrder] = useState(() => readSidebarCustomOrder(orderKey));
+	useEffect(() => setOrder(readSidebarCustomOrder(orderKey)), [orderKey]);
+	const orderedNodes = useMemo(() => applyOrder(nodes, (node) => node.path, order, "end"), [nodes, order]);
+	const ids = useMemo(() => orderedNodes.map((node) => node.path), [orderedNodes]);
+	const sensors = useReorderSensors();
+	const dragClickGuard = usePostDragClickGuard();
+	const onDragEnd = useCallback(({ active, over }: DragEndEvent) => {
+		const activeId = String(active.id);
+		dragClickGuard.markDragEnded(activeId);
+		if (!over) return;
+		const next = reorderWorkspaceItems(ids, activeId, String(over.id));
+		if (!next) return;
+		setOrder(next);
+		writeSidebarCustomOrder(orderKey, next);
+	}, [dragClickGuard, ids, orderKey]);
+
+	return (
+		<DndContext
+			collisionDetection={closestCenter}
+			modifiers={[restrictToListBounds]}
+			id={sessionDndId(`${projectKey}:workspace-folders:${parentPath}`)}
+			onDragEnd={onDragEnd}
+			sensors={sensors}
+		>
+			<SortableContext items={ids} strategy={verticalListSortingStrategy}>
+				{orderedNodes.map((node) => (
+					<WorkspaceFolderBranch
+						key={node.path}
+						workspace={workspace}
+						allSessions={allSessions}
+						node={node}
+						sessions={node.repo
+							? allSessions.filter((session) => sessionMatchesWorkspaceFolder(
+								session,
+								node.path,
+								workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS,
+							))
+							: []}
+						selection={selection}
+						projectDragInProgress={projectDragInProgress}
+						projectKey={projectKey}
+						consumeDragClick={dragClickGuard.consumeClick}
+						onKilled={onKilled}
+						onOpenSession={onOpenSession}
+					/>
+				))}
+			</SortableContext>
+		</DndContext>
+	);
+}
+
 type WorkspaceFolderBranchProps = {
 	workspace: WorkspaceSummary;
 	node: WorkspaceFolderTreeNode;
@@ -1619,6 +1696,8 @@ type WorkspaceFolderBranchProps = {
 	sessions: WorkspaceSession[];
 	selection: Selection;
 	projectDragInProgress: boolean;
+	projectKey: string;
+	consumeDragClick: (id: string) => boolean;
 	onKilled: (session: WorkspaceSession) => void;
 	onOpenSession: (sessionId: string) => void;
 };
@@ -1630,35 +1709,58 @@ const WorkspaceFolderBranch = memo(function WorkspaceFolderBranch({
 	sessions,
 	selection,
 	projectDragInProgress,
+	projectKey,
+	consumeDragClick,
 	onKilled,
 	onOpenSession,
 }: WorkspaceFolderBranchProps) {
 	const { t } = useTranslation();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const [collapsed, setCollapsed] = useState(false);
-	const { listed, remaining, showMore } = useProgressiveShowMore(sessions);
+	const chatOrderKey = `workspace-chats:${projectKey}:${node.path}`;
+	const [chatOrder, setChatOrder] = useState(() => readSidebarCustomOrder(chatOrderKey));
+	useEffect(() => setChatOrder(readSidebarCustomOrder(chatOrderKey)), [chatOrderKey]);
+	const orderedSessions = useMemo(
+		() => applyOrder(sessions, (session) => session.id, chatOrder, "end"),
+		[chatOrder, sessions],
+	);
+	const { listed, remaining, showMore } = useProgressiveShowMore(orderedSessions);
 	const sessionIds = useMemo(() => listed.map((session) => session.id), [listed]);
-	const toggle = () => setCollapsed((value) => !value);
+	const commitChatOrder = useCallback((next: string[] | null) => {
+		if (!next) return;
+		const listedIds = new Set(next);
+		const fullOrder = [...next, ...orderedSessions.filter((session) => !listedIds.has(session.id)).map((session) => session.id)];
+		setChatOrder(fullOrder);
+		writeSidebarCustomOrder(chatOrderKey, fullOrder);
+	}, [chatOrderKey, orderedSessions]);
+	const toggle = () => {
+		if (consumeDragClick(node.path)) return;
+		setCollapsed((value) => !value);
+	};
+	const sortable = useSortable({ id: node.path, disabled: projectDragInProgress });
 
 	return (
-		<div className="relative mt-0.5" data-workspace-folder-branch={node.path}>
-			<div className="group/nav-row group/folder-row relative flex h-7.5 w-full items-center">
+		<div ref={sortable.setNodeRef} style={sortableRowStyle(sortable)} className={cn("relative mt-0.5", sortable.isDragging && "z-10 opacity-70")} data-workspace-folder-branch={node.path}>
+			<div className="group/nav-row group/folder-row relative flex min-h-7.5 w-full items-center">
 				<SidebarMenuButton
+					ref={sortable.setActivatorNodeRef}
+					{...sortable.listeners}
 					aria-label={`${node.name} · ${workspace.name}`}
 					aria-expanded={!collapsed}
 					tooltip={node.path}
 					onClick={toggle}
+					title={node.name}
 					className={cn(
 						NAV_ROW_CLASS,
 						NAV_ROW_HIGHLIGHT_HOST_CLASS,
-						"h-7.5 py-0 pl-4 pr-8 text-xs font-medium text-muted-foreground hover:text-foreground",
+						"min-h-7.5 h-auto py-1 pl-4 pr-8 text-left text-xs font-medium text-muted-foreground hover:text-foreground",
 					)}
 				>
 					<span aria-hidden="true" className="relative z-[1] inline-flex size-4 shrink-0 items-center justify-center mr-0.5">
 						<ChevronRight className={cn("size-3 transition-transform duration-150", !collapsed && "rotate-90")} />
 					</span>
 					<Folder className="relative z-[1] mr-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-					<span className="relative z-[1] min-w-0 flex-1 truncate" data-folder-name="">
+					<span className="relative z-[1] min-w-0 flex-1 whitespace-normal break-words" data-folder-name="">
 						{node.name}
 					</span>
 				</SidebarMenuButton>
@@ -1697,7 +1799,7 @@ const WorkspaceFolderBranch = memo(function WorkspaceFolderBranch({
 								sessionIds={sessionIds}
 								activeSessionId={selection.activeSessionId}
 								plain={projectDragInProgress}
-								onReorder={() => {}}
+								onReorder={commitChatOrder}
 								onKilled={onKilled}
 								onOpen={onOpenSession}
 							/>
@@ -1711,25 +1813,18 @@ const WorkspaceFolderBranch = memo(function WorkspaceFolderBranch({
 							)}
 						</div>
 					)}
-					{node.children.map((child) => (
-						<WorkspaceFolderBranch
-							key={child.path}
-							workspace={workspace}
-							allSessions={allSessions}
-							node={child}
-							sessions={child.repo
-								? allSessions.filter((session) => sessionMatchesWorkspaceFolder(
-									session,
-									child.path,
-									workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS,
-								))
-								: []}
-							selection={selection}
-							projectDragInProgress={projectDragInProgress}
-							onKilled={onKilled}
-							onOpenSession={onOpenSession}
-						/>
-					))}
+					<WorkspaceFolderBranchList
+						workspace={workspace}
+						nodes={node.children}
+						parentPath={node.path}
+						projectKey={projectKey}
+						allSessions={allSessions}
+						selection={selection}
+						projectDragInProgress={projectDragInProgress}
+						consumeDragClick={consumeDragClick}
+						onKilled={onKilled}
+						onOpenSession={onOpenSession}
+					/>
 				</div>
 			)}
 		</div>
@@ -2469,19 +2564,17 @@ const ProjectItem = memo(function ProjectItem({
 										)}
 									</div>
 								)}
-								{workspaceFolderTree.map((node) => (
-									<WorkspaceFolderBranch
-										key={node.path}
-										workspace={workspace}
-										node={node}
-										allSessions={sessions}
-										sessions={node.repo ? sessions.filter((session) => sessionMatchesWorkspaceFolder(session, node.path, workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS)) : []}
-										selection={selection}
-										projectDragInProgress={projectDragInProgress}
-										onKilled={handleSessionKilled}
-										onOpenSession={openSession}
-									/>
-								))}
+							<WorkspaceFolderBranchList
+								workspace={workspace}
+								nodes={workspaceFolderTree}
+								parentPath="."
+								projectKey={projectKey}
+								allSessions={sessions}
+								selection={selection}
+								projectDragInProgress={projectDragInProgress}
+								onKilled={handleSessionKilled}
+								onOpenSession={openSession}
+							/>
 							</>
 						) : (
 							<>

@@ -37,7 +37,10 @@ type readyWorkspaceRepo struct {
 }
 
 func cleanWorkspaceFolderRel(raw string) string {
-	trimmed := strings.TrimSpace(filepath.ToSlash(raw))
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	trimmed := filepath.ToSlash(raw)
 	trimmed = strings.TrimPrefix(trimmed, "./")
 	trimmed = strings.Trim(trimmed, "/")
 	if trimmed == "" || trimmed == "." || trimmed == ".." || strings.HasPrefix(trimmed, "../") {
@@ -422,8 +425,8 @@ func parsePorcelainZPaths(raw string) []string {
 }
 
 func normalizeAttributedPath(raw, workspaceRoot string) string {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
+	trimmed := raw
+	if strings.TrimSpace(trimmed) == "" {
 		return ""
 	}
 	if workspaceRoot != "" && filepath.IsAbs(trimmed) {

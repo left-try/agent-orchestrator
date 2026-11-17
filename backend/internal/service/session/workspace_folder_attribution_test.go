@@ -50,8 +50,11 @@ func (f *fakeAttributionStore) ListSessionWorktrees(_ context.Context, id domain
 }
 
 func TestWorkspaceFolderAttributionHelpers(t *testing.T) {
-	if got := cleanWorkspaceFolderRel("  ./services/api/  "); got != "services/api" {
+	if got := cleanWorkspaceFolderRel("./services/api/"); got != "services/api" {
 		t.Errorf("cleanWorkspaceFolderRel = %q, want 'services/api'", got)
+	}
+	if got := cleanWorkspaceFolderRel("services/client portal "); got != "services/client portal " {
+		t.Errorf("cleanWorkspaceFolderRel with significant whitespace = %q, want %q", got, "services/client portal ")
 	}
 	if got := cleanWorkspaceFolderRel("../escape"); got != "" {
 		t.Errorf("cleanWorkspaceFolderRel escape = %q, want ''", got)
@@ -106,6 +109,24 @@ func TestWorkspaceFolderAttributionHelpers(t *testing.T) {
 	winnerCounts := map[string]int{"services/api": 3, "apps/web": 1}
 	if got := strictMaxFolder(winnerCounts); got != "services/api" {
 		t.Errorf("strictMaxFolder = %q, want 'services/api'", got)
+	}
+}
+
+func TestReadyWorkspaceReposForAttributionPreservesSignificantSpaces(t *testing.T) {
+	repos, _ := readyWorkspaceReposForAttribution([]domain.WorkspaceRepoRecord{{
+		Name:          "client portal ",
+		RelativePath:  "services/client portal ",
+		RepoOriginURL: "git@github.com:acme/client-portal.git",
+		GitStatus:     domain.GitStatusReady,
+	}})
+	if len(repos) != 1 {
+		t.Fatalf("ready repos = %d, want 1", len(repos))
+	}
+	if repos[0].relPath != "services/client portal " {
+		t.Fatalf("relative path = %q, want significant trailing space preserved", repos[0].relPath)
+	}
+	if folder, ok := matchReadyWorkspaceRepo("services/client portal /main.go", repos); !ok || folder != repos[0].relPath {
+		t.Fatalf("matchReadyWorkspaceRepo = %q, %v, want %q, true", folder, ok, repos[0].relPath)
 	}
 }
 

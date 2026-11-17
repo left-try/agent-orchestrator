@@ -6,7 +6,7 @@ export function workspaceFolderRepoForSession(
 	session: Pick<WorkspaceSession, "workspaceFolder">,
 	repos: readonly WorkspaceRepoSummary[],
 ): WorkspaceRepoSummary | undefined {
-	const folder = session.workspaceFolder?.trim();
+	const folder = session.workspaceFolder;
 	if (!folder) return undefined;
 	return repos.find((candidate) => candidate.relativePath === folder || candidate.name === folder);
 }
@@ -19,7 +19,19 @@ export function sessionMatchesWorkspaceFolder(
 	if (!folder) return true;
 	const matched = workspaceFolderRepoForSession(session, repos);
 	if (matched) return matched.relativePath === folder || matched.name === folder;
-	return session.workspaceFolder?.trim() === folder;
+	return session.workspaceFolder === folder;
+}
+
+/** Move one item before another without mutating the current visible order. */
+export function reorderWorkspaceItems(ids: readonly string[], activeId: string, overId: string): string[] | null {
+	if (activeId === overId) return null;
+	const from = ids.indexOf(activeId);
+	const to = ids.indexOf(overId);
+	if (from < 0 || to < 0) return null;
+	const next = [...ids];
+	const [moved] = next.splice(from, 1);
+	next.splice(to, 0, moved);
+	return next;
 }
 
 /** Resolve a session's folder only from explicit or inferred attribution. */

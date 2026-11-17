@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	filterSessionsByFolder,
+	reorderWorkspaceItems,
 	sessionMatchesWorkspaceFolder,
 	WORKSPACE_WIDE_FOLDER,
 	workspaceFolderForSession,
@@ -13,6 +14,11 @@ const repos = [
 ];
 
 describe("workspace folder attribution", () => {
+	it("reorders workspace folders and chats by dragged ids", () => {
+		expect(reorderWorkspaceItems(["api", "web", "docs"], "docs", "api")).toEqual(["docs", "api", "web"]);
+		expect(reorderWorkspaceItems(["api", "web"], "api", "missing")).toBeNull();
+	});
+
 	it("treats sessions without explicit child-folder attribution as workspace-wide", () => {
 		expect(workspaceFolderForSession({}, repos)).toEqual({ id: WORKSPACE_WIDE_FOLDER, label: "Workspace-wide" });
 		expect(workspaceFolderForSession({ workspaceFolder: "unknown" }, repos)).toEqual({ id: WORKSPACE_WIDE_FOLDER, label: "Workspace-wide" });
@@ -32,6 +38,13 @@ describe("workspace folder attribution", () => {
 		expect(workspaceFolderRepoForSession({ workspaceFolder: "apps/web" }, repos)).toEqual(repos[1]);
 		expect(workspaceFolderRepoForSession({ workspaceFolder: "other" }, repos)).toBeUndefined();
 		expect(workspaceFolderRepoForSession({}, repos)).toBeUndefined();
+	});
+
+	it("preserves significant whitespace in folder names", () => {
+		const spacedRepo = { name: "client portal ", relativePath: "services/client portal ", repo: "acme/client-portal" };
+		const spacedSession = { workspaceFolder: "services/client portal " };
+		expect(workspaceFolderRepoForSession(spacedSession, [spacedRepo])).toEqual(spacedRepo);
+		expect(sessionMatchesWorkspaceFolder(spacedSession, "services/client portal ", [spacedRepo])).toBe(true);
 	});
 
 	it("matches workspace folder correctly with sessionMatchesWorkspaceFolder", () => {
