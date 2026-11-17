@@ -834,7 +834,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 		(isConcreteModelID(projectModeForSelectedAgent) && !isCloudProject ? projectModeForSelectedAgent : "") ||
 		(catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? catalogPick : "");
-	const selectedModel = model || (modelTouched ? (catalogUsesModes ? "" : catalogPick) : defaultModelForSelectedAgent);
+	const useCodexDefaultModel = selectedAgent === "codex" && modelTouched && model === "";
+	const selectedModel = useCodexDefaultModel ? "" : model || (modelTouched ? (catalogUsesModes ? "" : catalogPick) : defaultModelForSelectedAgent);
 	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogPick : "") : defaultModeForSelectedAgent);
 	const selectedModelOrMode = (selectedModel || selectedMode).trim();
 	const projectModelOrMode = projectModelForSelectedAgent || projectModeForSelectedAgent;
@@ -948,7 +949,9 @@ export function useTaskLaunch({ projectId, hostId }: {
 		setModel(pickModelVariant(cursorChoice.family, { ...cursorChoice.variant, ...want }).id);
 		setModelTouched(true);
 	};
-	const requestedEffort = isCloudProject
+	const requestedEffort = useCodexDefaultModel
+		? undefined
+		: isCloudProject
 		? effectiveEffort || undefined
 		: isStandalone
 		// Standalone sessions have no project role to inherit from. Send the
@@ -1511,6 +1514,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 			footer={cursorChoice?.family.hasThinkingChoice ? <ToggleRow label={t("agentSwitch.thinking")} checked={cursorChoice.variant.thinking} onChange={(thinking) => pickCursorVariant({ thinking })} /> : undefined} />,
 		renderModelControl: (control: TaskComposerModelControl) => <TaskModelPicker {...control}
 			hostId={hostId}
+			allowConfiguredDefault={selectedAgent === "codex" && !isCloudProject}
+			configuredDefaultLabel={selectedAgent === "codex" && !isCloudProject ? t("settings.models.autoRouteLabel") : undefined}
 			onRefresh={isCloudProject && !cloudCatalogAgent ? undefined : refreshSelectedModels}
 			allowNativeSelection={isCloudProject}
 			footer={cloudModelSource}
