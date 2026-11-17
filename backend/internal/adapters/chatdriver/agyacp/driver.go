@@ -1,11 +1,15 @@
 // Package agyacp binds Google Antigravity to AO's reusable ACP Chat transport.
 //
-// The agy CLI has no ACP mode. Google publishes a separate ACP server,
-// `agy_acp_server`, through the ACP registry (`antigravity-acp`). Like
-// Autohand's separately distributed `autohand-acp`, AO launches the user's own
-// installed copy, found beside the agy CLI or on PATH, and never downloads or
-// bundles it. Login, models, MCP configuration, and conversations stay the
-// user's own under GEMINI_HOME (default ~/.gemini).
+// The agy CLI has a built-in ACP server, `agy acp`, which steers a running turn
+// when another prompt arrives. AO launches it from agy 1.5.4, the first release
+// whose `agy acp` does not hang on a second approval. Older CLIs have no ACP
+// mode, or that bug, so AO falls back to
+// Google's separate `agy_acp_server` from the ACP registry (`antigravity-acp`),
+// found beside the agy CLI or on PATH. Like Autohand's separately distributed
+// `autohand-acp`, AO never downloads or bundles either. Login, models, MCP
+// configuration, and conversations stay the user's own under GEMINI_HOME
+// (default ~/.gemini); both servers keep Chat conversations in the same
+// antigravity-acp folder.
 package agyacp
 
 import (
@@ -39,6 +43,14 @@ const (
 	modeYolo     = "yolo"
 )
 
+// `agy acp`'s mode ids. Its native Auto mode safely approves workspace edits
+// and sandboxed commands while retaining review for commands outside the
+// sandbox (Agy 1.5.4 changelog).
+const (
+	cliModeAcceptEdits = "accept-edits"
+	cliModeAuto        = "auto"
+)
+
 // New constructs the Antigravity ACP Chat driver.
 func New(plugin Plugin, log *slog.Logger) ports.ChatDriver {
 	var agyCLI func(context.Context) (string, error)
@@ -60,7 +72,7 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 			ports.ChatCapabilityResume:    true,
 		},
 		Probe: func(ctx context.Context) error {
-			if _, err := resolve.serverPath(ctx); err != nil {
+			if _, err := resolve.target(ctx); err != nil {
 				return fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 			}
 			if plugin != nil {
@@ -76,7 +88,7 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 			return nil
 		},
 		Launch: func(ctx context.Context, cfg acpdriver.LaunchConfig) (acpdriver.Launch, error) {
-			server, err := resolve.serverPath(ctx)
+			target, err := resolve.target(ctx)
 			if err != nil {
 				return acpdriver.Launch{}, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 			}
@@ -84,25 +96,101 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 			for key, value := range cfg.Env {
 				env[key] = value
 			}
-			if env[harnessPathEnvVar] == "" {
-				if harness := resolve.harnessPath(server); harness != "" {
-					env[harnessPathEnvVar] = harness
-				}
-			}
 			if env[disableWorkspaceTrustEnvVar] == "" {
 				env[disableWorkspaceTrustEnvVar] = "1"
 			}
-			return acpdriver.Launch{Command: server, Args: launchArgs(runtime.GOOS), Env: env}, nil
+			if target.cli {
+				return acpdriver.Launch{Command: target.path, Args: cliLaunchArgs(env, resolve.getenv), Env: env}, nil
+			}
+			if env[harnessPathEnvVar] == "" {
+				if harness := resolve.harnessPath(target.path); harness != "" {
+					env[harnessPathEnvVar] = harness
+				}
+			}
+			return acpdriver.Launch{Command: target.path, Args: launchArgs(runtime.GOOS), Env: env}, nil
 		},
-		ValidateInitialize: validateInitialize,
-		AfterInitialize:    newAuthBootstrap(agy.GeminiHome).run,
-		SessionMode:        sessionMode,
-		SessionOptions:     sessionOptions,
-		SessionPreamble:    sessionPreamble,
-		// No PermissionPolicy: every request Antigravity raises is answered by
-		// the user. AO never selects allow_always for them, which would let a
-		// cached grant survive a later switch to a stricter approval mode.
+		ValidateInitialize:  validateInitialize,
+		AfterInitialize:     afterInitialize(newAuthBootstrap(agy.GeminiHome)),
+		SessionMode:         sessionMode,
+		SessionModeForAgent: sessionModeForAgent,
+		SessionOptions:      sessionOptions,
+		SessionPreamble:     sessionPreamble,
+		// Native Agy Auto decides which actions are safe; any request it still
+		// raises remains with the user. AO never selects allow_always, which
+		// could outlive a switch to a stricter approval mode.
+		PermissionPolicy: permissionPolicy,
 	}
+}
+
+// cliLaunchArgs starts `agy acp` with its Chat data in antigravity-acp, where
+// the separate server keeps it, so AO's history checks and the Chat/terminal
+// handoff find it, and a Chat started on the separate server resumes. `agy acp`
+// ignores the GEMINI_HOME variable and stores under its --gemini-dir, so a
+// GEMINI_HOME set for the session or inherited by the daemon is passed as that
+// flag, the same precedence agy.GeminiHome uses.
+func cliLaunchArgs(env map[string]string, getenv func(string) string) []string {
+	args := []string{"acp", "--app-data-dir", agy.ACPStorageDir}
+	home := strings.TrimSpace(env["GEMINI_HOME"])
+	if home == "" {
+		home = strings.TrimSpace(getenv("GEMINI_HOME"))
+	}
+	if home != "" {
+		args = append(args, "--gemini-dir", home)
+	}
+	return args
+}
+
+// afterInitialize runs the separate server's sign-in bootstrap. `agy acp`
+// reuses the CLI's own login, and its authenticate method could start a
+// browser sign-in, so AO leaves it alone.
+func afterInitialize(bootstrap authBootstrap) func(context.Context, *acpsdk.ClientSideConnection, acpsdk.InitializeResponse, acpdriver.LaunchConfig) error {
+	return func(ctx context.Context, conn *acpsdk.ClientSideConnection, init acpsdk.InitializeResponse, cfg acpdriver.LaunchConfig) error {
+		if isCLIServer(init) {
+			return nil
+		}
+		return bootstrap.run(ctx, conn, init, cfg)
+	}
+}
+
+// sessionModeForAgent maps AO's approvals onto `agy acp`'s modes. Its native
+// Auto mode preserves Agy's sandbox and review behavior. The separate ACP
+// server has no Auto mode, so AO Auto falls back to auto_edit and leaves
+// command permission requests for the user. The CLI has no ACP yolo mode, so
+// bypass uses accept-edits plus one-time answers to its permission requests.
+func sessionModeForAgent(init acpsdk.InitializeResponse) func(ports.PermissionMode) string {
+	if !isCLIServer(init) {
+		return nil
+	}
+	return func(permission ports.PermissionMode) string {
+		switch ports.NormalizePermissionMode(permission) {
+		case ports.PermissionModeDefault:
+			return modeDefault
+		case ports.PermissionModeAcceptEdits:
+			return cliModeAcceptEdits
+		case ports.PermissionModeAuto:
+			return cliModeAuto
+		case ports.PermissionModeBypassPermissions:
+			return cliModeAcceptEdits
+		default:
+			return ""
+		}
+	}
+}
+
+// permissionPolicy answers any residual request only for explicit bypass.
+// Native `agy acp` Auto owns its safe-action review and must be allowed to ask
+// about anything it considers risky. The separate server has no Auto mode, so
+// AO Auto maps to auto_edit and leaves command requests to the user.
+func permissionPolicy(permission ports.PermissionMode, request acpsdk.RequestPermissionRequest) (acpsdk.PermissionOptionId, bool) {
+	if ports.NormalizePermissionMode(permission) != ports.PermissionModeBypassPermissions {
+		return "", false
+	}
+	for _, option := range request.Options {
+		if option.Kind == acpsdk.PermissionOptionKindAllowOnce {
+			return option.OptionId, true
+		}
+	}
+	return "", false
 }
 
 // launchArgs mirrors the registry entry's per-platform arguments. The Linux
@@ -115,17 +203,19 @@ func launchArgs(goos string) []string {
 }
 
 // sessionMode maps AO's approval vocabulary onto Antigravity's mode ids.
-// Antigravity has no classifier mode between auto_edit (edits only) and yolo
-// (all tools). AO's auto means "run without asking", which is how the
-// orchestrator and long worker turns operate, so it selects yolo, like Goose's
-// auto. Default keeps every gated tool behind an approval.
+// The separate antigravity-acp server has default, auto_edit, and yolo, but no
+// native Auto mode. AO Auto therefore uses auto_edit, leaving commands behind
+// ACP permission requests; explicit bypass selects yolo. Default asks for all
+// gated tools.
 func sessionMode(permission ports.PermissionMode) string {
 	switch ports.NormalizePermissionMode(permission) {
 	case ports.PermissionModeDefault:
 		return modeDefault
 	case ports.PermissionModeAcceptEdits:
 		return modeAutoEdit
-	case ports.PermissionModeAuto, ports.PermissionModeBypassPermissions:
+	case ports.PermissionModeAuto:
+		return modeAutoEdit
+	case ports.PermissionModeBypassPermissions:
 		return modeYolo
 	default:
 		return ""
