@@ -57,6 +57,30 @@ describe("KanbanCustomizeDialog", () => {
 		expect(switches.length).toBeGreaterThanOrEqual(6);
 	});
 
+	it("keeps footer actions in one right-aligned row", () => {
+		renderWithClient(
+			<KanbanCustomizeDialog
+				open={true}
+				onOpenChange={vi.fn()}
+				settings={defaultKanbanSettings()}
+			/>,
+		);
+
+		const reset = screen.getByTestId("kanban-reset-defaults");
+		const footer = reset.closest('[data-slot="dialog-footer"]');
+		expect(footer).not.toBeNull();
+		expect(footer).toHaveClass("flex-nowrap", "justify-end");
+		expect(Array.from(footer!.children)).toEqual([
+			reset,
+			screen.getByTestId("kanban-cancel-button"),
+			screen.getByTestId("kanban-save-button"),
+		]);
+		expect(reset).toHaveClass("min-w-0", "shrink");
+		expect(reset.querySelector("span")).toHaveClass("truncate");
+		expect(screen.getByTestId("kanban-cancel-button")).toHaveClass("shrink-0");
+		expect(screen.getByTestId("kanban-save-button")).toHaveClass("shrink-0");
+	});
+
 	it("toggles moveMergedToDone and enables Backlog column, then saves", async () => {
 		const user = userEvent.setup();
 		const onOpenChange = vi.fn();
