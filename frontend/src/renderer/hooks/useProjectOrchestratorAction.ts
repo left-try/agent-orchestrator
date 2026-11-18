@@ -102,7 +102,7 @@ export function useProjectOrchestratorAction({
 				void navigate(sessionNavigateTarget(projectId, resumableOrchestrator.id, hostId));
 			}
 			const openedSessionId = hostId
-				? await openRemoteOrchestrator(hostId, projectId, orchestrator, mode, false, source)
+				? await openRemoteOrchestrator(hostId, projectId, orchestrator, mode, false, source, folder)
 				: resumableOrchestrator
 				? (await earlyResume, resumableOrchestrator.id)
 				: project?.kind === CLOUD_PROJECT_KIND

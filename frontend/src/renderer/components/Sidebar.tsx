@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ProjectIconDialog, readProjectIcon, type ProjectIconChoice } from "./ProjectIconDialog";
+import { CustomProjectIcon, ProjectIconDialog, readProjectIcon, type ProjectIconChoice } from "./ProjectIconDialog";
 import { useProjectAvatars } from "../hooks/useProjectAvatars";
 import { paidPlanBadge, useCloudBilling } from "../hooks/useCloudBilling";
 import { useTranslation } from "react-i18next";
@@ -95,6 +95,7 @@ import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } fr
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { conversationQueryKey, conversationQueryOptions } from "../hooks/useConversation";
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
+import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import { resumeOrchestrator, spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { formatTimeCompact, formatTimeTerse } from "../lib/format-time";
@@ -425,16 +426,30 @@ function useShowMoreCap<T extends { id: string }>(
 }
 
 /** Folder chat lists reveal 10, 20, 40... additional rows on successive clicks. */
-function useProgressiveShowMore<T>(items: T[], initial = 5) {
+function useProgressiveShowMore<T>(items: T[], initial = 5, previewNext = true) {
 	const [visibleCount, setVisibleCount] = useState(initial);
 	const [batchSize, setBatchSize] = useState(10);
 	useEffect(() => { setVisibleCount(initial); setBatchSize(10); }, [initial, items.length]);
 	const remaining = Math.max(0, items.length - visibleCount);
-	// Keep the next row beneath the translucent control so users can see that
-	// the list continues without exposing another full chat by default.
-	const listed = items.slice(0, visibleCount + (remaining > 0 ? 1 : 0));
+	// General retains its partially visible next row; repo projects use plain
+	// Show more text below the list with no overlapping preview.
+	const listed = items.slice(0, visibleCount + (previewNext && remaining > 0 ? 1 : 0));
 	const showMore = () => { setVisibleCount((count) => count + batchSize); setBatchSize((size) => size * 2); };
 	return { listed, remaining, showMore };
+}
+
+function FolderShowMore({ onClick }: { onClick: () => void }) {
+	const { t } = useTranslation();
+	return (
+		<button
+			className="ml-6 min-h-6 px-2 text-left text-xs text-muted-foreground hover:text-foreground"
+			data-folder-show-more=""
+			onClick={onClick}
+			type="button"
+		>
+			{t("shell.showMore")}
+		</button>
+	);
 }
 
 function SidebarSectionScroller({
@@ -1715,7 +1730,6 @@ const WorkspaceFolderBranch = memo(function WorkspaceFolderBranch({
 	onOpenSession,
 }: WorkspaceFolderBranchProps) {
 	const { t } = useTranslation();
-	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const [collapsed, setCollapsed] = useState(false);
 	const chatOrderKey = `workspace-chats:${projectKey}:${node.path}`;
 	const [chatOrder, setChatOrder] = useState(() => readSidebarCustomOrder(chatOrderKey));
@@ -1724,7 +1738,7 @@ const WorkspaceFolderBranch = memo(function WorkspaceFolderBranch({
 		() => applyOrder(sessions, (session) => session.id, chatOrder, "end"),
 		[chatOrder, sessions],
 	);
-	const { listed, remaining, showMore } = useProgressiveShowMore(orderedSessions);
+	const { listed, remaining, showMore } = useProgressiveShowMore(orderedSessions, 5, false);
 	const sessionIds = useMemo(() => listed.map((session) => session.id), [listed]);
 	const commitChatOrder = useCallback((next: string[] | null) => {
 		if (!next) return;
@@ -1738,58 +1752,160 @@ const WorkspaceFolderBranch = memo(function WorkspaceFolderBranch({
 		setCollapsed((value) => !value);
 	};
 	const sortable = useSortable({ id: node.path, disabled: projectDragInProgress });
+	const folderOrchestrator = node.repo ? newestActiveOrchestrator(workspace.sessions, node.path) : undefined;
+	const folderActions = useProjectOrchestratorAction({
+		projectId: workspace.id,
+		project: workspace,
+		orchestrator: folderOrchestrator,
+		folder: node.repo ? node.path : undefined,
+		source: "sidebar",
+		hostId: workspace.hostId,
+	});
+	const [iconOpen, setIconOpen] = useState(false);
+	const folderIconKey = `${projectKey}:workspace-folder:${node.path}`;
+	const [customIcon, setCustomIcon] = useState<ProjectIconChoice | undefined>(() => readProjectIcon(folderIconKey));
+	useEffect(() => setCustomIcon(readProjectIcon(folderIconKey)), [folderIconKey]);
+	const folderBoardActive = selection.activeProjectId === workspace.id && selection.activeFolder === node.path && !selection.activeSessionId;
+	const openFolderBoard = () => selection.goProject(workspace.id, node.path);
+	const buildFolderMenuEntries = (): MenuEntry[] => [
+		{
+			kind: "item",
+			id: "new-task",
+			icon: <Plus aria-hidden="true" />,
+			label: t("shell.newTask"),
+			disabled: folderActions.isProjectRestarting || folderActions.isProvisioning,
+			onSelect: folderActions.openNewTask,
+		},
+		{
+			kind: "item",
+			id: "orchestrator",
+			icon: <OrchestratorIcon aria-hidden="true" />,
+			label: folderOrchestrator
+				? t("shell.openProjectOrchestrator", { name: node.name })
+				: t("shell.spawnProjectOrchestrator", { name: node.name }),
+			disabled: folderActions.isSpawning || folderActions.isProjectRestarting || folderActions.isProvisioning,
+			onSelect: folderActions.openOrchestrator,
+		},
+		{
+			kind: "item",
+			id: "board",
+			icon: <LayoutGrid aria-hidden="true" />,
+			label: t("shell.openProjectDashboard", { name: node.name }),
+			onSelect: openFolderBoard,
+		},
+		{ kind: "separator", id: "folder-customize-sep" },
+		{
+			kind: "item",
+			id: "custom-icon",
+			icon: <Folder aria-hidden="true" />,
+			label: "Customize icon",
+			onSelect: () => setIconOpen(true),
+		},
+	];
 
-	return (
+	const branch = (
 		<div ref={sortable.setNodeRef} style={sortableRowStyle(sortable)} className={cn("relative mt-0.5", sortable.isDragging && "z-10 opacity-70")} data-workspace-folder-branch={node.path}>
 			<div className="group/nav-row group/folder-row relative flex min-h-7.5 w-full items-center">
 				<SidebarMenuButton
 					ref={sortable.setActivatorNodeRef}
 					{...sortable.listeners}
-					aria-label={`${node.name} · ${workspace.name}`}
+					aria-label={node.repo ? t("shell.openProjectDashboard", { name: node.name }) : `${node.name} · ${workspace.name}`}
+					aria-current={node.repo && folderBoardActive ? "page" : undefined}
 					aria-expanded={!collapsed}
 					tooltip={node.path}
-					onClick={toggle}
+					onClick={node.repo ? openFolderBoard : toggle}
 					title={node.name}
 					className={cn(
 						NAV_ROW_CLASS,
 						NAV_ROW_HIGHLIGHT_HOST_CLASS,
-						"min-h-7.5 h-auto py-1 pl-4 pr-8 text-left text-xs font-medium text-muted-foreground hover:text-foreground",
+						"min-h-7.5 h-auto py-1 pl-4 text-left text-xs font-medium text-muted-foreground hover:text-foreground",
+						node.repo ? "pr-24" : "pr-8",
+						folderBoardActive && "text-foreground",
 					)}
 				>
 					<span aria-hidden="true" className="relative z-[1] inline-flex size-4 shrink-0 items-center justify-center mr-0.5">
 						<ChevronRight className={cn("size-3 transition-transform duration-150", !collapsed && "rotate-90")} />
 					</span>
-					<Folder className="relative z-[1] mr-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+					{customIcon ? (
+						<CustomProjectIcon choice={customIcon} className="relative z-[1] mr-1 size-3.5 shrink-0" />
+					) : (
+						<Folder className="relative z-[1] mr-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+					)}
 					<span className="relative z-[1] min-w-0 flex-1 whitespace-normal break-words" data-folder-name="">
 						{node.name}
 					</span>
 				</SidebarMenuButton>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<Button
-							size="icon-xs"
-							variant="quiet"
-							aria-label={`${t("shell.newTask")} · ${node.name}`}
-							className={cn(
-								HOVER_ACTION_CLASS,
-								"sidebar-expanded-chrome z-chrome absolute right-2 top-1/2 size-5 -translate-y-1/2 p-0 opacity-0 group-hover/folder-row:opacity-100 group-focus-within/folder-row:opacity-100",
-							)}
-							onClick={(event) => {
-								event.stopPropagation();
-								requestNewTask(workspace.id, workspace.hostId, { folder: node.path });
-							}}
-							type="button"
-						>
-							<Plus className="size-3" aria-hidden="true" />
-						</Button>
-					</TooltipTrigger>
-					<TooltipContent>{t("shell.newTask")}</TooltipContent>
-				</Tooltip>
+				{node.repo ? (
+					<Pressable
+						aria-label={t("shell.toggleProject", { name: node.name })}
+						aria-expanded={!collapsed}
+						className="absolute inset-y-0 left-0 z-10 w-9 cursor-pointer bg-transparent group-data-[collapsible=icon]:hidden"
+						data-workspace-folder-disclosure=""
+						tabIndex={-1}
+						onClick={toggle}
+						type="button"
+					/>
+				) : null}
+				{node.repo ? (
+					<div
+						className={cn("sidebar-expanded-chrome absolute inset-y-0 right-1 z-chrome flex items-center gap-0.5", projectDragInProgress && "pointer-events-none")}
+						data-workspace-folder-actions=""
+						onClick={(event) => event.stopPropagation()}
+						onPointerDown={(event) => event.stopPropagation()}
+					>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									size="icon-xs"
+									variant="quiet"
+									aria-label={`${t("shell.newTask")} · ${node.name}`}
+									className={HOVER_ACTION_CLASS}
+									disabled={folderActions.isProjectRestarting || folderActions.isProvisioning}
+									onClick={folderActions.openNewTask}
+									type="button"
+								>
+									<Plus aria-hidden="true" />
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent>{t("shell.newTask")}</TooltipContent>
+						</Tooltip>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									size="icon-xs"
+									variant="quiet"
+									aria-label={folderOrchestrator
+										? t("shell.openProjectOrchestrator", { name: node.name })
+										: t("shell.spawnProjectOrchestrator", { name: node.name })}
+									className={HOVER_ACTION_CLASS}
+									disabled={folderActions.isSpawning || folderActions.isProjectRestarting || folderActions.isProvisioning}
+									onClick={() => folderActions.openOrchestrator()}
+									type="button"
+								>
+									<OrchestratorReplyIcon reply={null} surface="sidebar" />
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent>{t("shell.orchestrator")}</TooltipContent>
+						</Tooltip>
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<Button size="icon-xs" variant="quiet" aria-label={t("shell.projectActions", { name: node.name })} className={HOVER_ACTION_CLASS} type="button">
+									<MoreVertical aria-hidden="true" />
+								</Button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent side="right" align="start" className="min-w-48">
+								<MenuKitContext.Provider value={dropdownMenuKit}>
+									<LazyMenuEntries build={buildFolderMenuEntries} />
+								</MenuKitContext.Provider>
+							</DropdownMenuContent>
+						</DropdownMenu>
+					</div>
+				) : null}
 			</div>
 			{!collapsed && (
 				<div className="pl-3.5">
-					{node.repo && sessions.length > 0 && (
-						<div className="relative">
+					{node.repo && orderedSessions.length > 0 && (
+						<>
 							<SessionReorderList
 								dndId={sessionDndId(`${workspace.id}-${node.path}`)}
 								testId={`session-list-${workspace.id}-${node.path}`}
@@ -1803,15 +1919,8 @@ const WorkspaceFolderBranch = memo(function WorkspaceFolderBranch({
 								onKilled={onKilled}
 								onOpen={onOpenSession}
 							/>
-							{remaining > 0 && (
-								<ShowMoreRow
-									className="absolute inset-x-0 bottom-0 z-20 h-5 bg-sidebar/75 px-3 backdrop-blur-[2px] shadow-sm"
-									expanded={false}
-									label={t("shell.showMore")}
-									onClick={showMore}
-								/>
-							)}
-						</div>
+							{remaining > 0 && <FolderShowMore onClick={showMore} />}
+						</>
 					)}
 					<WorkspaceFolderBranchList
 						workspace={workspace}
@@ -1827,8 +1936,29 @@ const WorkspaceFolderBranch = memo(function WorkspaceFolderBranch({
 					/>
 				</div>
 			)}
+			{node.repo && (
+				<ProjectIconDialog
+					open={iconOpen}
+					onOpenChange={setIconOpen}
+					projectName={node.name}
+					projectId={folderIconKey}
+					value={customIcon}
+					onSave={setCustomIcon}
+				/>
+			)}
 		</div>
 	);
+
+	return node.repo ? (
+		<ContextMenu>
+			<ContextMenuTrigger asChild>
+				<div onContextMenu={(event) => event.stopPropagation()}>{branch}</div>
+			</ContextMenuTrigger>
+			<ContextMenuContent className="min-w-48">
+				<LazyMenuEntries build={buildFolderMenuEntries} />
+			</ContextMenuContent>
+		</ContextMenu>
+	) : branch;
 });
 
 const ProjectItem = memo(function ProjectItem({
