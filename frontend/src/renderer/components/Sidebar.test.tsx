@@ -126,10 +126,10 @@ vi.mock("@dnd-kit/core", async (importOriginal) => {
 });
 
 vi.mock("../lib/rename-session", () => ({ renameSession: renameSessionMock }));
-vi.mock("../lib/spawn-orchestrator", () => ({
-	spawnOrchestrator: spawnMock,
-	resumeOrchestrator: resumeOrchestratorMock,
-}));
+vi.mock("../lib/spawn-orchestrator", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../lib/spawn-orchestrator")>();
+	return { ...actual, spawnOrchestrator: spawnMock, resumeOrchestrator: resumeOrchestratorMock };
+});
 // Counts session-row renders by id; every SessionRow calls this hook once.
 const sessionRowRenders = vi.hoisted(() => new Map<string, number>());
 vi.mock("../hooks/useSessionRename", async (importOriginal) => {
@@ -4979,8 +4979,8 @@ describe("Memoized Sidebar with unchanged props", () => {
 
 			// Nested folder paths render as a hierarchy.
 			expect(screen.getByRole("button", { name: "services · Mono Repo" })).toBeInTheDocument();
-			const apiBranch = screen.getByRole("button", { name: "api · Mono Repo" });
-			const webBranch = screen.getByRole("button", { name: "web · Mono Repo" });
+			const apiBranch = screen.getByRole("button", { name: "Open api dashboard" });
+			const webBranch = screen.getByRole("button", { name: "Open web dashboard" });
 			expect(apiBranch).toBeInTheDocument();
 			expect(webBranch).toBeInTheDocument();
 
@@ -4991,17 +4991,23 @@ describe("Memoized Sidebar with unchanged props", () => {
 			// No folder markers rendered on chat rows
 			expect(document.querySelector("[data-workspace-folder]")).not.toBeInTheDocument();
 
-			// Folder rows only expand/collapse; the project board remains project-wide.
+			// A repo folder opens its own board scope.
 			fireEvent.click(apiBranch);
-			expect(navigateMock).not.toHaveBeenCalledWith(expect.objectContaining({ search: { folder: "services/api" } }));
+			expect(navigateMock).toHaveBeenCalledWith({
+				to: "/projects/$projectId",
+				params: { projectId: "mf-workspace" },
+				search: { folder: "services/api" },
+			});
 		});
 
-		it("folder actions create a task for that folder without adding a folder orchestrator", async () => {
+		it("folder actions create tasks and orchestrators in that folder", async () => {
+			spawnMock.mockResolvedValue("api-orchestrator");
 			const multiFolderWorkspace: WorkspaceSummary = {
 				id: "mf-workspace",
 				name: "Mono Repo",
 				path: "/repo/mono",
 				kind: "workspace",
+				orchestratorAgent: "claude-code",
 				workspaceRepos: [
 					{ name: "api", relativePath: "services/api", repo: "acme/api" },
 				],
@@ -5020,7 +5026,33 @@ describe("Memoized Sidebar with unchanged props", () => {
 			expect(useUiStore.getState().newTaskRequest?.folder).toBe("services/api");
 			expect(useUiStore.getState().newTaskRequest?.projectId).toBe("mf-workspace");
 
-			expect(within(branch as HTMLElement).queryByRole("button", { name: /orchestrator/i })).not.toBeInTheDocument();
+			const orchestratorButton = within(branch as HTMLElement).getByRole("button", { name: "Spawn api orchestrator" });
+			fireEvent.click(orchestratorButton);
+			await waitFor(() => expect(spawnMock).toHaveBeenCalledWith(
+				"mf-workspace", "sidebar", false, undefined, undefined, undefined, "services/api",
+			));
+		});
+
+		it("routes right-clicks on a nested project to its own actions", async () => {
+			const multiFolderWorkspace: WorkspaceSummary = {
+				id: "mf-workspace",
+				name: "Mono Repo",
+				path: "/repo/mono",
+				kind: "workspace",
+				workspaceRepos: [
+					{ name: "api", relativePath: "services/api", repo: "acme/api" },
+					{ name: "web", relativePath: "apps/web", repo: "acme/web" },
+				],
+				sessions: [],
+			};
+			renderSidebar({ workspaces: [multiFolderWorkspace] });
+
+			const branch = document.querySelector('[data-workspace-folder-branch="services/api"]') as HTMLElement;
+			fireEvent.contextMenu(within(branch).getByRole("button", { name: "Open api dashboard" }));
+
+			expect(await screen.findByRole("menuitem", { name: "Open api dashboard" })).toBeInTheDocument();
+			expect(screen.getByRole("menuitem", { name: "Customize icon" })).toBeInTheDocument();
+			expect(screen.queryByRole("menuitem", { name: "Project settings" })).not.toBeInTheDocument();
 		});
 
 		it("reveals five folder chats first, then ten and twenty on successive clicks", async () => {
@@ -5039,13 +5071,14 @@ describe("Memoized Sidebar with unchanged props", () => {
 				sessions: folderChats,
 			};
 			renderSidebar({ workspaces: [multiFolderWorkspace] });
-			expect(screen.getByText("Folder chat 5")).toBeInTheDocument();
-			expect(screen.getByText("Folder chat 6")).toBeInTheDocument(); // dimmed under Show more
+			const sessionList = () => document.querySelectorAll('[data-testid="session-list-mf-workspace-services/api"] [data-session-name]');
+			expect(sessionList()).toHaveLength(5);
+			const branch = document.querySelector('[data-workspace-folder-branch="services/api"]') as HTMLElement;
+			expect(within(branch).getByRole("button", { name: "Show more" })).toHaveAttribute("data-folder-show-more");
 			await userEvent.click(screen.getByRole("button", { name: /^Show more/ }));
-			expect(screen.getByText("Folder chat 15")).toBeInTheDocument();
-			expect(screen.getByText("Folder chat 16")).toBeInTheDocument(); // next partially covered row
+			expect(sessionList()).toHaveLength(15);
 			await userEvent.click(screen.getByRole("button", { name: /^Show more/ }));
-			expect(screen.getByText("Folder chat 26")).toBeInTheDocument();
+			expect(sessionList()).toHaveLength(26);
 		});
 	});
 });
