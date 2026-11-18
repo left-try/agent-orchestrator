@@ -175,6 +175,7 @@ import type { RemoteHost } from "../hooks/useRemoteHosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
 import { RemoteHostsSection } from "./RemoteHostsSection";
+import { SidebarSubscriptionAllowance } from "./SidebarSubscriptionAllowance";
 
 // macOS paints framed chrome: the fixed TitlebarNav cluster carries the
 // sidebar toggle + history arrows above this surface. Windows hangs the sidebar
@@ -1424,6 +1425,7 @@ export const Sidebar = memo(function Sidebar({
 								tabIndex={isCollapsed ? -1 : 0}
 							/>
 						</div>
+						<SidebarSubscriptionAllowance tabIndex={isCollapsed ? -1 : 0} />
 						<div className={FOOTER_BOTTOM_ROW_CLASS}>
 							<Pressable
 								className={FOOTER_NAV_BUTTON_CLASS}
@@ -1457,6 +1459,7 @@ export const Sidebar = memo(function Sidebar({
 							tabIndex={isCollapsed ? -1 : 0}
 						/>
 					</div>
+					<SidebarSubscriptionAllowance tabIndex={isCollapsed ? -1 : 0} />
 					<FooterAccountRow
 						onConnectMobile={() => selection.goConnectMobile()}
 						onOpenSettings={() => selection.goGlobalSettings()}
