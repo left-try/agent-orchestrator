@@ -1468,9 +1468,6 @@ func Run(buildVersion string) (retErr error) {
 					if err := chatSvc.HibernateIdleReviewers(ctx); err != nil && ctx.Err() == nil {
 						log.Warn("idle reviewer hibernation failed", "err", err)
 					}
-					if !settingsSvc.ChatHibernationEnabled() {
-						continue
-					}
 					if err := sessMgr.HibernateIdleChats(ctx); err != nil && ctx.Err() == nil {
 						log.Warn("idle Chat hibernation failed", "err", err)
 					}

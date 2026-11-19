@@ -190,6 +190,39 @@ func TestHibernationGateKeepsCompletedIdleProviderWarmUntilEnabled(t *testing.T)
 	}
 }
 
+func TestIdleWorkerHibernationUsesThreeHourDefaultAndWorkerOnly(t *testing.T) {
+	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted, func() bool { return false })
+	ctx := context.Background()
+	if slept, err := h.svc.HibernateIdleWorkerChat(ctx, testSession); err != nil || slept || conv.calls.Load() != 0 {
+		t.Fatalf("worker before default threshold: slept=%v err=%v calls=%d", slept, err, conv.calls.Load())
+	}
+	rec, found, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !found {
+		t.Fatalf("get worker: found=%v err=%v", found, err)
+	}
+	rec.Activity.LastActivityAt = h.now().Add(-chatsvc.IdleWorkerHibernateAfter)
+	if err := h.st.UpdateSession(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	if slept, err := h.svc.HibernateIdleWorkerChat(ctx, testSession); err != nil || !slept || conv.calls.Load() != 1 {
+		t.Fatalf("eligible worker: slept=%v err=%v calls=%d", slept, err, conv.calls.Load())
+	}
+
+	other, otherConv := settledHibernationHarness(t, domain.TurnStateCompleted)
+	otherRec, found, err := other.st.GetSession(ctx, testSession)
+	if err != nil || !found {
+		t.Fatalf("get second session: found=%v err=%v", found, err)
+	}
+	otherRec.Kind = domain.KindOrchestrator
+	otherRec.Activity.LastActivityAt = other.now().Add(-chatsvc.IdleWorkerHibernateAfter)
+	if err := other.st.UpdateSession(ctx, otherRec); err != nil {
+		t.Fatal(err)
+	}
+	if slept, err := other.svc.HibernateIdleWorkerChat(ctx, testSession); err != nil || slept || otherConv.calls.Load() != 0 {
+		t.Fatalf("orchestrator under worker policy: slept=%v err=%v calls=%d", slept, err, otherConv.calls.Load())
+	}
+}
+
 func TestHibernateChatKeepsOrchestratorAwake(t *testing.T) {
 	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
 	ctx := context.Background()
