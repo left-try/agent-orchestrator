@@ -1446,6 +1446,9 @@ func Run(buildVersion string) (retErr error) {
 				log.Warn("reviewer chat recovery deferred", "err", reconcileErr)
 			}
 			close(reviewerChatsRecovered)
+			if reconcileErr := reviewSvc.ReconcileMergedPRReviewers(ctx); reconcileErr != nil {
+				log.Warn("merged reviewer cleanup deferred", "err", reconcileErr)
+			}
 			if reconcileErr := sessMgr.ReconcileBackground(ctx); reconcileErr != nil {
 				log.Error("background session reconciliation on boot failed", "err", reconcileErr)
 			}

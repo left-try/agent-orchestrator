@@ -63,6 +63,7 @@ type Store interface {
 	ClearReviewerHandleByHarness(ctx stdctx.Context, id domain.SessionID, harness domain.ReviewerHarness) error
 	InsertReviewRun(ctx stdctx.Context, r domain.ReviewRun) error
 	UpdateReviewRunResult(ctx stdctx.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error)
+	UpdateReviewActivity(ctx stdctx.Context, id string, state domain.ActivityState, agentSessionID, launchID string) (bool, error)
 	UpdateReviewAgentSessionID(ctx stdctx.Context, id, agentSessionID string) (bool, error)
 	SupersedeStaleRunningReviewRuns(ctx stdctx.Context, sessionID domain.SessionID, prURL, targetSHA, body string) (int64, error)
 	CancelRunningReviewRunsBySession(ctx stdctx.Context, sessionID domain.SessionID, body string) (int64, error)
@@ -1040,6 +1041,29 @@ func (e *Engine) RecoverChatReviewers(ctx stdctx.Context) error {
 	}
 	var recoveryErrors []error
 	for _, review := range reviews {
+		// A settled Chat reviewer for a merged PR should not be respawned after
+		// restart; startup cleanup will stop any surviving provider controller.
+		if review.ReviewerActivityState == domain.ActivityExited && review.ControllerGeneration == "" {
+			runs, runsErr := e.store.ListReviewRunsBySession(ctx, review.SessionID)
+			if runsErr != nil {
+				recoveryErrors = append(recoveryErrors, fmt.Errorf("check reviewer %s active runs: %w", review.ID, runsErr))
+				continue
+			}
+			prs, prsErr := e.prs.ListPRsBySession(ctx, review.SessionID)
+			if prsErr != nil {
+				recoveryErrors = append(recoveryErrors, fmt.Errorf("check reviewer %s merged PRs: %w", review.ID, prsErr))
+				continue
+			}
+			merged := make(map[string]bool, len(prs))
+			for _, pr := range prs {
+				if pr.Merged {
+					merged[pr.URL] = true
+				}
+			}
+			if reviewHasSettledMergedRun(review, runs, merged) {
+				continue
+			}
+		}
 		if _, restoreErr := e.restoreRecoverableChatReviewer(ctx, review); restoreErr != nil {
 			if _, recordErr := e.store.RecordReviewChatControllerError(ctx, review.ID, restoreErr.Error(), e.clock()); recordErr != nil {
 				recoveryErrors = append(recoveryErrors, fmt.Errorf("record reviewer %s recovery error: %w", review.ID, recordErr))
@@ -1599,6 +1623,149 @@ func reviewerRowActive(review domain.Review, runs []domain.ReviewRun) bool {
 	for _, run := range runs {
 		if run.ReviewID == review.ID && run.Status == domain.ReviewRunRunning {
 			return true
+		}
+	}
+	return false
+}
+
+// CleanupMergedPR releases reviewer processes whose latest durable pass was
+// for prURL after that PR is known merged. Running passes remain untouched so
+// their result can still be submitted; submission retries cleanup afterwards.
+func (e *Engine) CleanupMergedPR(ctx stdctx.Context, workerID domain.SessionID, prURL string) error {
+	if workerID == "" || strings.TrimSpace(prURL) == "" {
+		return fmt.Errorf("%w: worker session id and PR URL are required", ErrInvalid)
+	}
+	if err := e.waitForChatRecovery(ctx); err != nil {
+		return err
+	}
+	unlock := e.lockWorker(workerID)
+	defer unlock()
+	prs, err := e.prs.ListPRsBySession(ctx, workerID)
+	if err != nil {
+		return err
+	}
+	for _, pr := range prs {
+		if pr.URL == prURL && pr.Merged {
+			return e.cleanupMergedPRsLocked(ctx, workerID, map[string]bool{prURL: true})
+		}
+	}
+	return nil
+}
+
+// CleanupMergedPRs reconciles merged PRs for one worker after observations may
+// have been missed while the daemon was offline.
+func (e *Engine) CleanupMergedPRs(ctx stdctx.Context, workerID domain.SessionID) error {
+	if workerID == "" {
+		return fmt.Errorf("%w: worker session id is required", ErrInvalid)
+	}
+	if err := e.waitForChatRecovery(ctx); err != nil {
+		return err
+	}
+	unlock := e.lockWorker(workerID)
+	defer unlock()
+	prs, err := e.prs.ListPRsBySession(ctx, workerID)
+	if err != nil {
+		return err
+	}
+	merged := make(map[string]bool)
+	for _, pr := range prs {
+		if pr.Merged && pr.URL != "" {
+			merged[pr.URL] = true
+		}
+	}
+	return e.cleanupMergedPRsLocked(ctx, workerID, merged)
+}
+
+func (e *Engine) cleanupMergedPRsLocked(ctx stdctx.Context, workerID domain.SessionID, merged map[string]bool) error {
+	if len(merged) == 0 {
+		return nil
+	}
+	runs, err := e.store.ListReviewRunsBySession(ctx, workerID)
+	if err != nil {
+		return err
+	}
+	reviews, err := e.store.ListReviewsBySession(ctx, workerID)
+	if err != nil {
+		return err
+	}
+	for _, review := range reviews {
+		if !reviewHasSettledMergedRun(review, runs, merged) {
+			continue
+		}
+		if review.InterfaceMode == domain.ReviewerInterfaceChat {
+			if review.ProviderConversationID == "" {
+				continue
+			}
+		} else if review.ReviewerHandleID == "" || sharedReviewerHandleHasOtherWork(review, reviews, runs, merged) {
+			continue
+		}
+
+		if review.InterfaceMode == domain.ReviewerInterfaceChat {
+			if err := e.stopReviewChatWork(ctx, review); err != nil {
+				return fmt.Errorf("stop merged reviewer Chat %q: %w", review.ID, err)
+			}
+		} else if err := e.launcher.Destroy(ctx, review.ReviewerHandleID); err != nil {
+			return fmt.Errorf("destroy merged reviewer %q: %w", review.ID, err)
+		}
+		updated, err := e.store.UpdateReviewActivity(ctx, review.ID, domain.ActivityExited, "", review.ReviewerLaunchID)
+		if err != nil {
+			return fmt.Errorf("mark merged reviewer %q exited: %w", review.ID, err)
+		}
+		if !updated {
+			return fmt.Errorf("mark merged reviewer %q exited: reviewer generation changed", review.ID)
+		}
+		if review.InterfaceMode != domain.ReviewerInterfaceChat {
+			if err := e.store.ClearReviewerHandleByHarness(ctx, workerID, review.Harness); err != nil {
+				return fmt.Errorf("clear merged reviewer handle %q: %w", review.ID, err)
+			}
+		}
+	}
+	return nil
+}
+
+func reviewHasSettledMergedRun(review domain.Review, runs []domain.ReviewRun, merged map[string]bool) bool {
+	var latest domain.ReviewRun
+	hasRun, hasMergedRun, hasActiveRun := false, false, false
+	for _, run := range runs {
+		if !reviewRunBelongsTo(run, review) {
+			continue
+		}
+		hasRun = true
+		hasMergedRun = hasMergedRun || merged[run.PRURL]
+		hasActiveRun = hasActiveRun || run.Status == domain.ReviewRunRunning
+		if newerReviewRun(run, latest) {
+			latest = run
+		}
+	}
+	return hasRun && hasMergedRun && !hasActiveRun && merged[latest.PRURL]
+}
+
+func reviewRunBelongsTo(run domain.ReviewRun, review domain.Review) bool {
+	if run.ReviewID != "" {
+		return run.ReviewID == review.ID
+	}
+	return run.Harness != "" && run.Harness == review.Harness
+}
+
+func newerReviewRun(candidate, current domain.ReviewRun) bool {
+	if current.ID == "" || candidate.CreatedAt.After(current.CreatedAt) {
+		return true
+	}
+	return candidate.CreatedAt.Equal(current.CreatedAt) && candidate.ID > current.ID
+}
+
+func sharedReviewerHandleHasOtherWork(review domain.Review, reviews []domain.Review, runs []domain.ReviewRun, merged map[string]bool) bool {
+	for _, other := range reviews {
+		if other.ID == review.ID || other.ReviewerHandleID == "" || other.ReviewerHandleID != review.ReviewerHandleID {
+			continue
+		}
+		if other.ReviewerActivityState == domain.ActivityActive {
+			return true
+		}
+		for _, run := range runs {
+			if reviewRunBelongsTo(run, other) && (!merged[run.PRURL] || run.Status == domain.ReviewRunRunning) {
+				return true
+			}
 		}
 	}
 	return false

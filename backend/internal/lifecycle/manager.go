@@ -135,6 +135,10 @@ type sessionTerminator interface {
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 }
 
+type mergedPRReviewerCleanup interface {
+	CleanupMergedPR(ctx context.Context, sessionID domain.SessionID, prURL string) error
+}
+
 type sessionUsageFinalizer interface {
 	FinalizeSession(
 		ctx context.Context,
@@ -243,7 +247,8 @@ type Manager struct {
 	notifications notificationSink
 	// completionTerminator is late-bound because Session Manager itself depends
 	// on this lifecycle reducer. It is required before the SCM observer starts.
-	completionTerminator sessionTerminator
+	completionTerminator    sessionTerminator
+	mergedPRReviewerCleanup mergedPRReviewerCleanup
 	// usageFinalizer is late-bound because the usage pipeline is optional. It
 	// receives terminal intent before is_terminated makes the session ineligible
 	// for normal source discovery.
@@ -326,6 +331,15 @@ func (m *Manager) SetCompletionTerminator(terminator sessionTerminator) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.completionTerminator = terminator
+}
+
+// SetMergedPRReviewerCleanup wires the review engine's scoped process cleanup.
+// It is late-bound alongside the session terminator because both services
+// depend on the lifecycle reducer.
+func (m *Manager) SetMergedPRReviewerCleanup(cleanup mergedPRReviewerCleanup) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mergedPRReviewerCleanup = cleanup
 }
 
 // SetUsageFinalizer wires termination and relaunches to usage collection.

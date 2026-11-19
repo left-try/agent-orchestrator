@@ -51,6 +51,10 @@ type fakeReviewService struct {
 }
 
 func (*fakeReviewService) RecoverChatReviewers(context.Context) error { return nil }
+func (*fakeReviewService) CleanupMergedPR(context.Context, domain.SessionID, string) error {
+	return nil
+}
+func (*fakeReviewService) ReconcileMergedPRReviewers(context.Context) error { return nil }
 
 func (f *fakeReviewService) runTrigger(
 	_ context.Context,

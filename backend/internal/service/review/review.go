@@ -64,6 +64,8 @@ func reviewErrorKind(err error) string {
 // Manager is the reviews surface the HTTP controller depends on.
 type Manager interface {
 	RecoverChatReviewers(ctx context.Context) error
+	CleanupMergedPR(ctx context.Context, workerID domain.SessionID, prURL string) error
+	ReconcileMergedPRReviewers(ctx context.Context) error
 	TriggerRequested(ctx context.Context, workerID domain.SessionID, req TriggerRequest) (TriggerOutcome, error)
 	RequestRereview(ctx context.Context, workerID domain.SessionID, prURL, reviewer string) error
 	ResolveReviewComment(ctx context.Context, workerID domain.SessionID, prURL, commentURL string) error
@@ -95,7 +97,8 @@ type Service struct {
 	// engineTrigger indirects the engine's source-tagged trigger so the
 	// instrumented path can be exercised without standing up a full engine and
 	// its eighteen-method store. Defaulted in New; only tests replace it.
-	engineTrigger func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error)
+	engineTrigger    func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error)
+	cleanupMergedPRs func(context.Context, domain.SessionID) error
 }
 
 type reviewNotificationSink interface {
@@ -111,8 +114,37 @@ func (s *Service) RecoverChatReviewers(ctx context.Context) error {
 	return s.engine.RecoverChatReviewers(ctx)
 }
 
+// ReconcileMergedPRReviewers retries cleanup from durable merged PR and run
+// facts after reviewer Chat controllers have recovered during startup.
+func (s *Service) ReconcileMergedPRReviewers(ctx context.Context) error {
+	if s.cleanupMergedPRs == nil || s.store == nil {
+		return nil
+	}
+	sessions, err := s.store.ListAllSessions(ctx)
+	if err != nil {
+		return fmt.Errorf("list sessions for merged reviewer cleanup: %w", err)
+	}
+	var cleanupErr error
+	for _, session := range sessions {
+		if err := s.cleanupMergedPRs(ctx, session.ID); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("cleanup merged reviewers for %s: %w", session.ID, err))
+		}
+	}
+	return cleanupErr
+}
+
+// CleanupMergedPR applies a confirmed merge observation to durable reviewer
+// state for the owning worker.
+func (s *Service) CleanupMergedPR(ctx context.Context, workerID domain.SessionID, prURL string) error {
+	if s.engine == nil {
+		return nil
+	}
+	return s.engine.CleanupMergedPR(ctx, workerID, prURL)
+}
+
 // Store is the review_run persistence surface owned by the service submit path.
 type Store interface {
+	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
 	GetReviewByID(ctx context.Context, id string) (domain.Review, bool, error)
 	UpdateReviewActivity(ctx context.Context, id string, state domain.ActivityState, agentSessionID, launchID string) (bool, error)
 	GetReviewRun(ctx context.Context, id string) (domain.ReviewRun, bool, error)
@@ -250,6 +282,9 @@ func New(engine *reviewcore.Engine, store Store, opts ...Option) *Service {
 		s.engineTrigger = func(ctx context.Context, workerID domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
 			return s.engine.TriggerWithOptions(ctx, workerID, opts)
 		}
+	}
+	if s.cleanupMergedPRs == nil && s.engine != nil {
+		s.cleanupMergedPRs = s.engine.CleanupMergedPRs
 	}
 	return s
 }
@@ -874,6 +909,11 @@ func (s *Service) SubmitMany(ctx context.Context, workerID domain.SessionID, rev
 			return nil, fmt.Errorf("%w: no submittable review runs in submission (superseded: %s)", ErrInvalid, strings.Join(supersededRunIDs, ", "))
 		}
 		return nil, fmt.Errorf("%w: no submittable review runs in submission", ErrInvalid)
+	}
+	if s.cleanupMergedPRs != nil {
+		if err := s.cleanupMergedPRs(ctx, workerID); err != nil {
+			return runs, fmt.Errorf("review results were saved but merged reviewer cleanup failed: %w", err)
+		}
 	}
 	// The result reaches the worker through the PR itself: the reviewer posts
 	// its review on the provider, and the SCM observer forwards unresolved

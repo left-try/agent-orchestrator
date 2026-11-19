@@ -22,6 +22,7 @@ type fakeStore struct {
 	reviewOK                bool
 	batchRuns               []domain.ReviewRun
 	prs                     []domain.PullRequest
+	sessions                []domain.SessionRecord
 	prReviews               map[string][]domain.PullRequestReview
 	prComments              map[string][]domain.PullRequestComment
 	sessionAutoInjectReview *bool
@@ -46,6 +47,10 @@ func (f *fakeStore) GetReviewByID(_ context.Context, id string) (domain.Review, 
 		return f.review, true, nil
 	}
 	return domain.Review{}, false, nil
+}
+
+func (f *fakeStore) ListAllSessions(context.Context) ([]domain.SessionRecord, error) {
+	return append([]domain.SessionRecord(nil), f.sessions...), nil
 }
 
 func (f *fakeStore) UpdateReviewActivity(_ context.Context, id string, state domain.ActivityState, agentSessionID, launchID string) (bool, error) {
@@ -533,6 +538,44 @@ func TestSubmitManyRejectsOnlySupersededRuns(t *testing.T) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
 	} else if !strings.Contains(err.Error(), "superseded: run-1") {
 		t.Fatalf("err = %v, want rejected run id", err)
+	}
+}
+
+func TestSubmitManyPersistsResultBeforeRetryingMergedReviewerCleanup(t *testing.T) {
+	st := &fakeStore{ok: true, batchRuns: []domain.ReviewRun{{ID: "run-1", SessionID: "mer-1", PRURL: "pr1", Status: domain.ReviewRunRunning}}}
+	wantCleanupErr := errors.New("destroy failed")
+	cleanupCalled := false
+	svc := New(nil, st)
+	svc.cleanupMergedPRs = func(context.Context, domain.SessionID) error {
+		cleanupCalled = true
+		return wantCleanupErr
+	}
+
+	runs, err := svc.SubmitMany(context.Background(), "mer-1", []SubmittedReview{{RunID: "run-1", Verdict: domain.VerdictApproved}})
+	if !errors.Is(err, wantCleanupErr) || !strings.Contains(err.Error(), "results were saved") {
+		t.Fatalf("SubmitMany() error = %v, want cleanup error after saving result", err)
+	}
+	if !cleanupCalled || len(runs) != 1 || runs[0].Status != domain.ReviewRunComplete || st.batchRuns[0].Status != domain.ReviewRunComplete {
+		t.Fatalf("cleanupCalled=%v returned=%+v stored=%+v", cleanupCalled, runs, st.batchRuns)
+	}
+}
+
+func TestReconcileMergedPRReviewersContinuesAcrossSessions(t *testing.T) {
+	wantErr := errors.New("destroy failed")
+	st := &fakeStore{sessions: []domain.SessionRecord{{ID: "worker-1"}, {ID: "worker-2"}}}
+	var cleaned []domain.SessionID
+	svc := New(nil, st)
+	svc.cleanupMergedPRs = func(_ context.Context, id domain.SessionID) error {
+		cleaned = append(cleaned, id)
+		if id == "worker-1" {
+			return wantErr
+		}
+		return nil
+	}
+
+	err := svc.ReconcileMergedPRReviewers(context.Background())
+	if !errors.Is(err, wantErr) || len(cleaned) != 2 || cleaned[0] != "worker-1" || cleaned[1] != "worker-2" {
+		t.Fatalf("ReconcileMergedPRReviewers() = %v, cleaned=%v", err, cleaned)
 	}
 }
 
