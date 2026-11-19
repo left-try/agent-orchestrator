@@ -21,6 +21,10 @@ const chatHibernateGrace = 30 * time.Second
 // cache and all, before idle hibernation may stop it.
 const IdleBeforeHibernate = 10 * time.Minute
 
+// IdleWorkerHibernateAfter is the default quiet period before an unattended
+// worker Chat provider may be stopped automatically.
+const IdleWorkerHibernateAfter = 3 * time.Hour
+
 type wakeRun struct {
 	done    chan struct{}
 	err     error
@@ -179,6 +183,7 @@ func (s *Service) liveViewLeasesLocked(id domain.SessionID) map[string]time.Time
 // replaced harness release so its next start uses the installed one.
 type hibernateOptions struct {
 	versionRefresh bool
+	workerIdle     bool
 	// forUpdate stops an idle provider so an installer can replace its
 	// executable; the session wakes on its next message or once the update ends.
 	forUpdate bool
@@ -190,7 +195,7 @@ type hibernateOptions struct {
 }
 
 func (o hibernateOptions) enabled(s *Service) bool {
-	if o.versionRefresh || o.forUpdate {
+	if o.versionRefresh || o.forUpdate || o.workerIdle {
 		return true
 	}
 	return s.hibernationEnabled != nil && s.hibernationEnabled()
@@ -199,6 +204,9 @@ func (o hibernateOptions) enabled(s *Service) bool {
 // eligible is the durable-fact check, read before and again after the
 // provider confirms it has no background work.
 func (o hibernateOptions) eligible(s *Service, rec domain.SessionRecord) bool {
+	if o.workerIdle && rec.Kind != domain.KindWorker {
+		return false
+	}
 	candidate := rec
 	if (o.forUpdate || o.versionRefresh) && candidate.Kind == domain.KindOrchestrator {
 		// Idle hibernation keeps orchestrators running. An update or a move to
@@ -220,6 +228,26 @@ func (o hibernateOptions) viewed(s *Service, id domain.SessionID) bool {
 // false result means the final locked eligibility check found useful work.
 func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool, error) {
 	return s.hibernateChat(ctx, id, hibernateOptions{minIdle: IdleBeforeHibernate})
+}
+
+// HibernateIdleChat applies the automatic policy for a daemon sweep. Workers
+// use the longer default regardless of Developer Mode; other Chat sessions
+// retain the existing Developer Mode gate and quiet period.
+func (s *Service) HibernateIdleChat(ctx context.Context, id domain.SessionID) (bool, error) {
+	rec, found, err := s.sessions.GetSession(ctx, id)
+	if err != nil || !found {
+		return false, err
+	}
+	if rec.Kind == domain.KindWorker {
+		return s.HibernateIdleWorkerChat(ctx, id)
+	}
+	return s.HibernateChat(ctx, id)
+}
+
+// HibernateIdleWorkerChat applies the default unattended-worker policy. It
+// shares the ordinary hibernation fences and leaves the session resumable.
+func (s *Service) HibernateIdleWorkerChat(ctx context.Context, id domain.SessionID) (bool, error) {
+	return s.hibernateChat(ctx, id, hibernateOptions{workerIdle: true, minIdle: IdleWorkerHibernateAfter})
 }
 
 // HibernateChatForVersionRefresh stops an idle provider that still runs a

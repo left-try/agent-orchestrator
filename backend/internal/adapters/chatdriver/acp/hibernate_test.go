@@ -34,7 +34,7 @@ func TestACPDriverUsesProviderHibernationCheck(t *testing.T) {
 		}
 		h := conv.(ports.ChatProviderHibernator)
 		canSleep, err := h.CanHibernate(context.Background())
-		if err != nil || canSleep == configured {
+		if err != nil || canSleep {
 			t.Fatalf("configured=%v CanHibernate=%v, %v", configured, canSleep, err)
 		}
 		if configured {

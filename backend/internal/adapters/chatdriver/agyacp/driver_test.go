@@ -55,8 +55,11 @@ func TestPermissionPolicyApprovesOnceOnlyInBypassMode(t *testing.T) {
 func TestSessionModeForAgentMapsNativeAgyAuto(t *testing.T) {
 	init := acpsdk.InitializeResponse{AgentInfo: &acpsdk.Implementation{Name: cliServerAgentName, Version: "1.5.6"}}
 	modeFor := sessionModeForAgent(init)
-	if modeFor == nil || modeFor(ports.PermissionModeAuto) != "auto" {
-		t.Fatalf("native Agy Auto mode = %v", modeFor)
+	if modeFor == nil {
+		t.Fatal("native Agy Auto mode has no permission mapping")
+	}
+	if got := modeFor(ports.PermissionModeAuto); got != "auto" {
+		t.Fatalf("native Agy Auto mode = %q, want auto", got)
 	}
 	legacy := acpsdk.InitializeResponse{AgentInfo: &acpsdk.Implementation{Name: serverAgentName, Version: "1.3.0"}}
 	if sessionModeForAgent(legacy) != nil {

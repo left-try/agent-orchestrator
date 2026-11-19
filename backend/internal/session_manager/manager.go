@@ -3535,11 +3535,27 @@ func (m *Manager) HibernateIdleChats(ctx context.Context) error {
 
 func (m *Manager) hibernateEligibleChat(ctx context.Context, id domain.SessionID) error {
 	hibernator, ok := m.chat.(interface {
-		HibernateChat(context.Context, domain.SessionID) (bool, error)
+		HibernateIdleChat(context.Context, domain.SessionID) (bool, error)
 	})
 	if !ok {
-		return nil
+		hibernator, ok := m.chat.(interface {
+			HibernateChat(context.Context, domain.SessionID) (bool, error)
+		})
+		if !ok {
+			return nil
+		}
+		return m.runChatHibernation(ctx, id, func(ctx context.Context) error {
+			_, err := hibernator.HibernateChat(ctx, id)
+			return err
+		})
 	}
+	return m.runChatHibernation(ctx, id, func(ctx context.Context) error {
+		_, err := hibernator.HibernateIdleChat(ctx, id)
+		return err
+	})
+}
+
+func (m *Manager) runChatHibernation(ctx context.Context, id domain.SessionID, hibernate func(context.Context) error) error {
 	operationCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := m.beginAgentOperation(operationCtx, id, agentOperationHibernate); err != nil {
@@ -3553,8 +3569,7 @@ func (m *Manager) hibernateEligibleChat(ctx context.Context, id domain.SessionID
 	if err != nil || active {
 		return err
 	}
-	_, err = hibernator.HibernateChat(operationCtx, id)
-	return err
+	return hibernate(operationCtx)
 }
 
 // WakeHibernatedChat waits for an in-flight hibernation or wake, then resumes

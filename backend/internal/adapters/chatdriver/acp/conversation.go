@@ -1355,7 +1355,9 @@ func (c *conversation) Terminate() error {
 
 func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
 	if c.hibernationCheck == nil {
-		return true, nil
+		// A missing provider-specific probe cannot establish that child
+		// processes or background work are absent.
+		return false, nil
 	}
 	c.mu.Lock()
 	id := c.sessionID
