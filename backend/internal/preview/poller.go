@@ -11,7 +11,7 @@ import (
 )
 
 // DefaultPollInterval is the preview poller's scan interval when none is configured.
-const DefaultPollInterval = 250 * time.Millisecond
+const DefaultPollInterval = 2 * time.Second
 
 type sessionPreviewSource interface {
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)

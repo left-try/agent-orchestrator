@@ -17,6 +17,19 @@ type fakePreviewSessions struct {
 	sets     []previewSet
 }
 
+type countingPreviewSessions struct {
+	calls chan struct{}
+}
+
+func (f *countingPreviewSessions) ListAllSessions(_ context.Context) ([]domain.SessionRecord, error) {
+	f.calls <- struct{}{}
+	return nil, nil
+}
+
+func (f *countingPreviewSessions) SetPreview(_ context.Context, _ domain.SessionID, _ string) (domain.Session, error) {
+	return domain.Session{}, nil
+}
+
 type previewSet struct {
 	id  domain.SessionID
 	url string
@@ -49,6 +62,35 @@ func TestPollerDoesNotOpenUntargetedWorkerEntry(t *testing.T) {
 	}
 
 	assertSets(t, svc.sets)
+}
+
+func TestPollerUsesTwoSecondDefaultInterval(t *testing.T) {
+	source := &countingPreviewSessions{calls: make(chan struct{}, 2)}
+	poller := NewPoller(source, source, "http://127.0.0.1:3001", PollerConfig{Logger: discardLogger()})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := poller.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	select {
+	case <-source.calls:
+	case <-time.After(time.Second):
+		t.Fatal("initial poll did not run")
+	}
+
+	select {
+	case <-source.calls:
+		t.Fatal("default poll repeated before the two-second fallback interval")
+	case <-time.After(time.Second):
+	}
+
+	select {
+	case <-source.calls:
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("poll did not repeat at the two-second fallback interval")
+	}
 }
 
 func TestPollerNormalizesExplicitWorkspaceEntrypoint(t *testing.T) {
