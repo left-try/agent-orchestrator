@@ -193,6 +193,34 @@ func (f *fakeStore) ClearReviewerHandleByHarness(_ context.Context, _ domain.Ses
 	}
 	return nil
 }
+func (f *fakeStore) UpdateReviewActivity(_ context.Context, id string, state domain.ActivityState, agentSessionID, launchID string) (bool, error) {
+	for harness, review := range f.reviews {
+		if review.ID != id || review.ReviewerLaunchID != launchID {
+			continue
+		}
+		if state != "" {
+			review.ReviewerActivityState = state
+		}
+		if agentSessionID != "" {
+			review.AgentSessionID = agentSessionID
+		}
+		f.reviews[harness] = review
+		if f.review != nil && f.review.ID == id {
+			f.review = &review
+		}
+		return true, nil
+	}
+	if f.review != nil && f.review.ID == id && f.review.ReviewerLaunchID == launchID {
+		if state != "" {
+			f.review.ReviewerActivityState = state
+		}
+		if agentSessionID != "" {
+			f.review.AgentSessionID = agentSessionID
+		}
+		return true, nil
+	}
+	return false, nil
+}
 func (f *fakeStore) InsertReviewRun(_ context.Context, r domain.ReviewRun) error {
 	if f.insertErr != nil {
 		winner := r
@@ -582,6 +610,26 @@ func TestRecoverChatReviewersRequiresStoreRecoveryQuery(t *testing.T) {
 
 	if err := eng.RecoverChatReviewers(context.Background()); !errors.Is(err, want) {
 		t.Fatalf("RecoverChatReviewers() error = %v, want %v", err, want)
+	}
+}
+
+func TestRecoverChatReviewersDoesNotRespawnSettledReviewerAfterRestart(t *testing.T) {
+	review := domain.Review{ID: "rev-merged", SessionID: "mer-1", Harness: domain.ReviewerCodex,
+		InterfaceMode: domain.ReviewerInterfaceChat, ProviderConversationID: "conversation-1",
+		ReviewerActivityState: domain.ActivityExited}
+	prURL := "https://github.com/acme/repo/pull/17"
+	store := &fakeStore{review: &review, recoverableReviews: []domain.Review{review}, runs: []domain.ReviewRun{{
+		ID: "run-merged", ReviewID: review.ID, SessionID: review.SessionID, Harness: review.Harness,
+		PRURL: prURL, Status: domain.ReviewRunComplete,
+	}}}
+	launcher := &fakeLauncher{interfaceMode: domain.ReviewerInterfaceChat}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, fakePRs{prs: []domain.PullRequest{{URL: prURL, Merged: true}}}, fakeProjects{}, launcher)
+
+	if err := eng.RecoverChatReviewers(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if launcher.spawned || launcher.restored || launcher.notified {
+		t.Fatalf("settled reviewer was restarted: spawned=%v restored=%v notified=%v", launcher.spawned, launcher.restored, launcher.notified)
 	}
 }
 
@@ -3381,5 +3429,131 @@ func TestFailedReviewLaunchKeepsArchivedReviewerHidden(t *testing.T) {
 				t.Fatalf("failed trigger reopened archive: %+v, %v", saved, err)
 			}
 		})
+	}
+}
+
+func TestCleanupMergedPRDestroysCompletedReviewerAndKeepsSubmittedResult(t *testing.T) {
+	ctx := context.Background()
+	prURL := "https://github.com/acme/repo/pull/17"
+	review := domain.Review{
+		ID: "review-codex", SessionID: "mer-1", ProjectID: "mer", Harness: domain.ReviewerCodex,
+		ReviewerHandleID: "review-mer-1", ReviewerLaunchID: "launch-1", ReviewerActivityState: domain.ActivityActive,
+		InterfaceMode: domain.ReviewerInterfaceTUI,
+	}
+	run := domain.ReviewRun{
+		ID: "run-merged", ReviewID: review.ID, SessionID: "mer-1", Harness: review.Harness,
+		PRURL: prURL, TargetSHA: "head-17", Status: domain.ReviewRunComplete,
+		Verdict: domain.VerdictChangesRequested, Body: "preserve these findings", GithubReviewID: "gh-review-17",
+	}
+	store := &fakeStore{reviews: map[domain.ReviewerHarness]domain.Review{review.Harness: review}, runs: []domain.ReviewRun{run}}
+	launcher := &fakeLauncher{}
+	engine := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, fakePRs{prs: []domain.PullRequest{{URL: prURL, HeadSHA: "head-17", Merged: true}}}, fakeProjects{}, launcher)
+
+	if err := engine.CleanupMergedPRs(ctx, "mer-1"); err != nil {
+		t.Fatalf("CleanupMergedPRs: %v", err)
+	}
+	if launcher.destroyCalls != 1 || launcher.destroyedHandle != review.ReviewerHandleID {
+		t.Fatalf("destroy calls=%d handle=%q, want one destroy of %q", launcher.destroyCalls, launcher.destroyedHandle, review.ReviewerHandleID)
+	}
+	saved := store.reviews[review.Harness]
+	if saved.ReviewerHandleID != "" || saved.ReviewerActivityState != domain.ActivityExited {
+		t.Fatalf("reviewer state after cleanup = %+v, want no handle and exited", saved)
+	}
+	if got := store.runs[0]; got.Status != domain.ReviewRunComplete || got.Verdict != domain.VerdictChangesRequested || got.Body != run.Body || got.GithubReviewID != run.GithubReviewID {
+		t.Fatalf("submitted result changed during cleanup: %+v", got)
+	}
+}
+
+func TestCleanupMergedPRLeavesRunningAndUnrelatedReviewersAlone(t *testing.T) {
+	ctx := context.Background()
+	mergedURL := "https://github.com/acme/repo/pull/17"
+	openURL := "https://github.com/acme/repo/pull/18"
+	mergedReview := domain.Review{ID: "review-merged", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "review-merged-pane", ReviewerLaunchID: "launch-1", InterfaceMode: domain.ReviewerInterfaceTUI}
+	activeReview := domain.Review{ID: "review-active", SessionID: "mer-1", Harness: domain.ReviewerCursor, ReviewerHandleID: "review-active-pane", ReviewerLaunchID: "launch-2", InterfaceMode: domain.ReviewerInterfaceTUI}
+	store := &fakeStore{
+		reviews: map[domain.ReviewerHarness]domain.Review{mergedReview.Harness: mergedReview, activeReview.Harness: activeReview},
+		runs: []domain.ReviewRun{
+			{ID: "run-merged", ReviewID: mergedReview.ID, SessionID: "mer-1", Harness: mergedReview.Harness, PRURL: mergedURL, TargetSHA: "head-17", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, Body: "approval retained"},
+			{ID: "run-active", ReviewID: activeReview.ID, SessionID: "mer-1", Harness: activeReview.Harness, PRURL: openURL, TargetSHA: "head-18", Status: domain.ReviewRunRunning},
+		},
+	}
+	launcher := &fakeLauncher{}
+	engine := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, fakePRs{prs: []domain.PullRequest{
+		{URL: mergedURL, HeadSHA: "head-17", Merged: true},
+		{URL: openURL, HeadSHA: "head-18"},
+	}}, fakeProjects{}, launcher)
+
+	if err := engine.CleanupMergedPRs(ctx, "mer-1"); err != nil {
+		t.Fatalf("CleanupMergedPRs: %v", err)
+	}
+	if launcher.destroyCalls != 1 || launcher.destroyedHandle != mergedReview.ReviewerHandleID {
+		t.Fatalf("destroy calls=%d handle=%q, want only completed merged reviewer %q", launcher.destroyCalls, launcher.destroyedHandle, mergedReview.ReviewerHandleID)
+	}
+	if got := store.reviews[activeReview.Harness]; got.ReviewerHandleID != activeReview.ReviewerHandleID || got.ReviewerActivityState == domain.ActivityExited {
+		t.Fatalf("unrelated active reviewer changed: %+v", got)
+	}
+	if got := store.runs[1]; got.Status != domain.ReviewRunRunning {
+		t.Fatalf("unrelated running review changed: %+v", got)
+	}
+}
+
+func TestCleanupMergedPRDoesNotDestroyReviewerWhileItsRunIsActive(t *testing.T) {
+	ctx := context.Background()
+	prURL := "https://github.com/acme/repo/pull/17"
+	review := domain.Review{ID: "review-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "review-mer-1", ReviewerLaunchID: "launch-1", InterfaceMode: domain.ReviewerInterfaceTUI}
+	run := domain.ReviewRun{ID: "run-active", ReviewID: review.ID, SessionID: "mer-1", Harness: review.Harness, PRURL: prURL, TargetSHA: "head-17", Status: domain.ReviewRunRunning}
+	store := &fakeStore{reviews: map[domain.ReviewerHarness]domain.Review{review.Harness: review}, runs: []domain.ReviewRun{run}}
+	launcher := &fakeLauncher{}
+	engine := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, fakePRs{prs: []domain.PullRequest{{URL: prURL, HeadSHA: "head-17", Merged: true}}}, fakeProjects{}, launcher)
+
+	if err := engine.CleanupMergedPRs(ctx, "mer-1"); err != nil {
+		t.Fatalf("CleanupMergedPRs: %v", err)
+	}
+	if launcher.destroyCalls != 0 || store.reviews[review.Harness].ReviewerHandleID != review.ReviewerHandleID || store.runs[0].Status != domain.ReviewRunRunning {
+		t.Fatalf("active reviewer was interrupted: destroyed=%d review=%+v run=%+v", launcher.destroyCalls, store.reviews[review.Harness], store.runs[0])
+	}
+}
+
+func TestCleanupMergedPRPreservesSharedHandleWithAnotherActiveReviewer(t *testing.T) {
+	ctx := context.Background()
+	prURL := "https://github.com/acme/repo/pull/17"
+	mergedReview := domain.Review{ID: "review-merged", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "shared-pane", ReviewerLaunchID: "launch-1", InterfaceMode: domain.ReviewerInterfaceTUI}
+	activeReview := domain.Review{ID: "review-active", SessionID: "mer-1", Harness: domain.ReviewerCursor, ReviewerHandleID: "shared-pane", ReviewerLaunchID: "launch-2", ReviewerActivityState: domain.ActivityActive, InterfaceMode: domain.ReviewerInterfaceTUI}
+	store := &fakeStore{
+		reviews: map[domain.ReviewerHarness]domain.Review{mergedReview.Harness: mergedReview, activeReview.Harness: activeReview},
+		runs:    []domain.ReviewRun{{ID: "run-merged", ReviewID: mergedReview.ID, SessionID: "mer-1", Harness: mergedReview.Harness, PRURL: prURL, Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved}},
+	}
+	launcher := &fakeLauncher{}
+	engine := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, fakePRs{prs: []domain.PullRequest{{URL: prURL, Merged: true}}}, fakeProjects{}, launcher)
+
+	if err := engine.CleanupMergedPRs(ctx, "mer-1"); err != nil {
+		t.Fatalf("CleanupMergedPRs: %v", err)
+	}
+	if launcher.destroyCalls != 0 || store.reviews[activeReview.Harness].ReviewerActivityState != domain.ActivityActive {
+		t.Fatalf("shared active reviewer was interrupted: destroys=%d reviewer=%+v", launcher.destroyCalls, store.reviews[activeReview.Harness])
+	}
+}
+
+func TestCleanupMergedPRRetriesDestroyFailureWithoutLosingResult(t *testing.T) {
+	ctx := context.Background()
+	prURL := "https://github.com/acme/repo/pull/17"
+	review := domain.Review{ID: "review-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "review-mer-1", ReviewerLaunchID: "launch-1", InterfaceMode: domain.ReviewerInterfaceTUI}
+	run := domain.ReviewRun{ID: "run-complete", ReviewID: review.ID, SessionID: "mer-1", Harness: review.Harness, PRURL: prURL, TargetSHA: "head-17", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, Body: "saved verdict"}
+	store := &fakeStore{reviews: map[domain.ReviewerHarness]domain.Review{review.Harness: review}, runs: []domain.ReviewRun{run}}
+	launcher := &fakeLauncher{destroyErr: errors.New("runtime unavailable")}
+	engine := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, fakePRs{prs: []domain.PullRequest{{URL: prURL, HeadSHA: "head-17", Merged: true}}}, fakeProjects{}, launcher)
+
+	if err := engine.CleanupMergedPRs(ctx, "mer-1"); err == nil {
+		t.Fatal("CleanupMergedPRs succeeded despite destroy failure")
+	}
+	if store.reviews[review.Harness].ReviewerHandleID != review.ReviewerHandleID {
+		t.Fatalf("failed destroy cleared the durable handle: %+v", store.reviews[review.Harness])
+	}
+	launcher.destroyErr = nil
+	if err := engine.CleanupMergedPRs(ctx, "mer-1"); err != nil {
+		t.Fatalf("retry CleanupMergedPRs: %v", err)
+	}
+	if store.reviews[review.Harness].ReviewerHandleID != "" || store.runs[0].Body != run.Body || store.runs[0].Verdict != run.Verdict {
+		t.Fatalf("retry did not clean process while retaining result: review=%+v run=%+v", store.reviews[review.Harness], store.runs[0])
 	}
 }

@@ -4977,6 +4977,69 @@ func TestEmitTelemetryStampsRequestID(t *testing.T) {
 	}
 }
 
+type recordingMergedReviewerCleanup struct {
+	sessionID domain.SessionID
+	prURL     string
+	calls     int
+	err       error
+}
+
+func (r *recordingMergedReviewerCleanup) CleanupMergedPR(_ context.Context, sessionID domain.SessionID, prURL string) error {
+	r.calls++
+	r.sessionID = sessionID
+	r.prURL = prURL
+	return r.err
+}
+
+func TestMergedPRObservationSchedulesScopedReviewerCleanup(t *testing.T) {
+	m, st, _ := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	cleanup := &recordingMergedReviewerCleanup{}
+	m.SetMergedPRReviewerCleanup(cleanup)
+
+	if err := m.ApplyPRObservation(ctx, "mer-1", ports.PRObservation{Fetched: true, URL: "https://github.com/acme/repo/pull/17", Merged: true}); err != nil {
+		t.Fatalf("ApplyPRObservation merged: %v", err)
+	}
+	if cleanup.calls != 1 || cleanup.sessionID != "mer-1" || cleanup.prURL != "https://github.com/acme/repo/pull/17" {
+		t.Fatalf("merged cleanup calls=%d session=%q PR=%q", cleanup.calls, cleanup.sessionID, cleanup.prURL)
+	}
+	if err := m.ApplyPRObservation(ctx, "mer-1", ports.PRObservation{Fetched: true, URL: "https://github.com/acme/repo/pull/18", Closed: true}); err != nil {
+		t.Fatalf("ApplyPRObservation closed: %v", err)
+	}
+	if cleanup.calls != 1 {
+		t.Fatalf("unmerged closed PR triggered cleanup %d times, want 0 additional calls", cleanup.calls-1)
+	}
+}
+
+func TestMergedPRCleanupFailurePropagatesForObserverRetry(t *testing.T) {
+	m, st, _ := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	wantErr := errors.New("reviewer runtime unavailable")
+	cleanup := &recordingMergedReviewerCleanup{err: wantErr}
+	m.SetMergedPRReviewerCleanup(cleanup)
+
+	err := m.ApplyPRObservation(ctx, "mer-1", ports.PRObservation{Fetched: true, URL: "https://github.com/acme/repo/pull/17", Merged: true})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("ApplyPRObservation error = %v, want cleanup error %v", err, wantErr)
+	}
+}
+
+func TestMergedPRCleanupUsesDurableMergeWhenObservationIsStale(t *testing.T) {
+	m, st, _ := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	prURL := "https://github.com/acme/repo/pull/17"
+	st.prs["mer-1"] = []domain.PullRequest{{URL: prURL, Merged: true}}
+	cleanup := &recordingMergedReviewerCleanup{}
+	m.SetMergedPRReviewerCleanup(cleanup)
+
+	if err := m.ApplyPRObservation(ctx, "mer-1", ports.PRObservation{Fetched: true, URL: prURL}); err != nil {
+		t.Fatalf("ApplyPRObservation stale open snapshot: %v", err)
+	}
+	if cleanup.calls != 1 || cleanup.prURL != prURL {
+		t.Fatalf("durable merge did not trigger scoped cleanup: %+v", cleanup)
+	}
+}
+
 // Each unresolved comment gets its own dedup slot. Sharing one key per PR made
 // every poll re-send whichever comments were not the most recent signature
 // written, and made them share the reviewMaxNudge budget so a PR with more

@@ -79,12 +79,29 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	if err := m.ReconcileSessionOutputType(ctx, id); err != nil {
 		slog.Default().Warn("lifecycle: reconcile session output type", "session", id, "err", err)
 	}
+	m.mu.Lock()
+	mergedReviewerCleanup := m.mergedPRReviewerCleanup
+	m.mu.Unlock()
+	persistedMerged := false
+	if !o.Merged && mergedReviewerCleanup != nil && strings.TrimSpace(o.URL) != "" {
+		pr, found, err := m.store.GetPR(ctx, o.URL)
+		if err != nil {
+			return fmt.Errorf("read PR state before merged-reviewer cleanup: %w", err)
+		}
+		persistedMerged = found && pr.Merged
+	}
+	merged := o.Merged || persistedMerged
+	if merged && mergedReviewerCleanup != nil && strings.TrimSpace(o.URL) != "" {
+		if err := mergedReviewerCleanup.CleanupMergedPR(ctx, id, o.URL); err != nil {
+			return fmt.Errorf("cleanup reviewer after PR merge: %w", err)
+		}
+	}
 	// A PR reaching a terminal state (merged or closed) no longer ends the
 	// session on its own: a session may own several PRs. Terminate only when no
 	// open PR remains and at least one of them merged. The observer persists the
 	// PR row before calling lifecycle, so the store already reflects this
 	// transition when sessionComplete reads it.
-	if o.Merged || o.Closed {
+	if merged || o.Closed {
 		rec, ok, err := m.store.GetSession(ctx, id)
 		if err != nil || !ok {
 			return err

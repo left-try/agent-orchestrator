@@ -434,6 +434,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	}
 	reviewSvc := reviewsvc.New(reviewEngine, store, reviewOpts...)
 	mgr.SetReviewerTerminator(reviewSvc)
+	lcm.SetMergedPRReviewerCleanup(reviewSvc)
 	return sessionSvc, reviewSvc, mgr, nil
 }
 
