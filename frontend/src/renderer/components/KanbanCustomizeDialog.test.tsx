@@ -184,4 +184,19 @@ describe("KanbanCustomizeDialog", () => {
 			});
 		});
 	});
+
+	it("renders footer actions in a horizontal row without flex-col", () => {
+		renderWithClient(
+			<KanbanCustomizeDialog
+				open={true}
+				onOpenChange={vi.fn()}
+				settings={defaultKanbanSettings()}
+			/>,
+		);
+
+		const footer = screen.getByTestId("kanban-save-button").closest('[data-slot="dialog-footer"]');
+		expect(footer).not.toBeNull();
+		expect(footer?.className).toContain("flex-row");
+		expect(footer?.className).not.toContain("flex-col");
+	});
 });
