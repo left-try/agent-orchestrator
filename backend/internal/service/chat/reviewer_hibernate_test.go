@@ -82,6 +82,10 @@ func TestIdleReviewerHibernatesAndResumesSameConversation(t *testing.T) {
 		close(release)
 		t.Fatalf("sleeping snapshot = %v, %v", snapshot.Controller, err)
 	}
+	if !svc.HasLiveControllerForOwner(owner) {
+		close(release)
+		t.Fatal("HasLiveControllerForOwner returned false while reviewer was hibernated")
+	}
 	sent := make(chan error, 1)
 	go func() {
 		_, err := svc.SendForOwner(ctx, owner, ports.ChatUserMessage{Text: "follow up", ClientMessageID: "follow-up"})
