@@ -1360,7 +1360,15 @@ func (s *Service) HasLiveChatController(sessionID domain.SessionID) bool {
 }
 
 // HasLiveControllerForOwner is the typed-owner form used by reviewer chats.
+// A hibernated reviewer remains alive and resumable on demand, so callers such
+// as ReviewChatAlive must not treat hibernation as an unexpected process exit.
 func (s *Service) HasLiveControllerForOwner(owner domain.ConversationOwner) bool {
+	s.mu.RLock()
+	asleep := s.sleepingReviews[owner]
+	s.mu.RUnlock()
+	if asleep {
+		return true
+	}
 	controller, err := s.ControllerForOwner(owner)
 	return err == nil && controller.State() != ports.ChatControllerStopped
 }
