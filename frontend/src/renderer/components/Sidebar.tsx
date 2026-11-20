@@ -1425,7 +1425,6 @@ export const Sidebar = memo(function Sidebar({
 								tabIndex={isCollapsed ? -1 : 0}
 							/>
 						</div>
-						<SidebarSubscriptionAllowance tabIndex={isCollapsed ? -1 : 0} />
 						<div className={FOOTER_BOTTOM_ROW_CLASS}>
 							<Pressable
 								className={FOOTER_NAV_BUTTON_CLASS}
@@ -1439,6 +1438,10 @@ export const Sidebar = memo(function Sidebar({
 									<span className="tracking-tight">{t("settings.back")}</span>
 								</span>
 							</Pressable>
+							<SidebarSubscriptionAllowance
+								className={FOOTER_ICON_BUTTON_CLASS}
+								tabIndex={isCollapsed ? -1 : 0}
+							/>
 						</div>
 					</>
 				) : (
@@ -1459,7 +1462,6 @@ export const Sidebar = memo(function Sidebar({
 							tabIndex={isCollapsed ? -1 : 0}
 						/>
 					</div>
-					<SidebarSubscriptionAllowance tabIndex={isCollapsed ? -1 : 0} />
 					<FooterAccountRow
 						onConnectMobile={() => selection.goConnectMobile()}
 						onOpenSettings={() => selection.goGlobalSettings()}
@@ -3713,6 +3715,7 @@ function FooterAccountRow({
 					</Pressable>
 				)}
 			</div>
+			<SidebarSubscriptionAllowance className={FOOTER_ICON_BUTTON_CLASS} tabIndex={tabIndex} />
 			<FooterMobileMenu onConnectMobile={onConnectMobile} tabIndex={tabIndex} />
 			{configured ? (
 				<Tooltip>
