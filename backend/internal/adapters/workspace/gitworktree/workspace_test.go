@@ -1219,6 +1219,127 @@ func TestResolveWorktreeRefsInfersRepoDefaultBranchWhenUnset(t *testing.T) {
 	}
 }
 
+func TestCreateSecondaryOrchestratorUsesSessionScopedPath(t *testing.T) {
+	root := t.TempDir()
+	repo := t.TempDir()
+	ws, err := New(Options{ManagedRoot: root, RepoResolver: StaticRepoResolver{"stovo-team": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	primaryPath := filepath.Join(ws.managedRoot, "stovo-team", "orchestrator", "stovo-team-orchestrator")
+	if err := os.MkdirAll(primaryPath, 0o755); err != nil {
+		t.Fatalf("mkdir primary: %v", err)
+	}
+	wantSecondaryPath := filepath.Join(ws.managedRoot, "stovo-team", "orchestrator", "stovo-team-97")
+
+	var addedPath string
+	ws.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "config --local --bool extensions.worktreeConfig"):
+			return nil, nil
+		case strings.Contains(joined, "check-ref-format"):
+			return nil, nil
+		case strings.Contains(joined, "worktree list --porcelain"):
+			return []byte("worktree " + primaryPath + "\nbranch refs/heads/ao/stovo-team-1\n"), nil
+		case strings.Contains(joined, "rev-parse --verify --quiet refs/heads/ao/stovo-team-97"):
+			return nil, exitStatusOne(t)
+		case strings.Contains(joined, "rev-parse --verify --quiet"):
+			return []byte("deadbeef\n"), nil
+		case strings.Contains(joined, "worktree add"):
+			for _, arg := range args {
+				if arg == wantSecondaryPath {
+					addedPath = arg
+				}
+			}
+			return nil, nil
+		default:
+			return nil, nil
+		}
+	}
+
+	info, err := ws.Create(context.Background(), ports.WorkspaceConfig{
+		ProjectID:     "stovo-team",
+		SessionID:     "stovo-team-97",
+		Kind:          domain.KindOrchestrator,
+		SessionPrefix: "stovo-team",
+		Branch:        "ao/stovo-team-97",
+		BaseBranch:    "main",
+	})
+	if err != nil {
+		t.Fatalf("Create secondary orchestrator: %v", err)
+	}
+	if info.Path != wantSecondaryPath {
+		t.Fatalf("info.Path = %q, want %q", info.Path, wantSecondaryPath)
+	}
+	if addedPath != wantSecondaryPath {
+		t.Fatalf("git worktree add path = %q, want %q", addedPath, wantSecondaryPath)
+	}
+}
+
+func TestCreateWorkspaceProjectSecondaryOrchestratorUsesSessionScopedPath(t *testing.T) {
+	root := t.TempDir()
+	repo := t.TempDir()
+	childRepo := t.TempDir()
+	ws, err := New(Options{ManagedRoot: root, RepoResolver: StaticRepoResolver{"stovo-team": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	primaryPath := filepath.Join(ws.managedRoot, "stovo-team", "orchestrator", "stovo-team-orchestrator")
+	if err := os.MkdirAll(primaryPath, 0o755); err != nil {
+		t.Fatalf("mkdir primary: %v", err)
+	}
+	wantRootPath := filepath.Join(ws.managedRoot, "stovo-team", "orchestrator", "stovo-team-97")
+	wantChildPath := filepath.Join(wantRootPath, "services", "api")
+
+	ws.run = func(_ context.Context, dir string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "config --local --bool extensions.worktreeConfig"):
+			return nil, nil
+		case strings.Contains(joined, "check-ref-format"):
+			return nil, nil
+		case strings.Contains(joined, "worktree list --porcelain"):
+			if strings.Contains(joined, repo) {
+				return []byte("worktree " + primaryPath + "\nbranch refs/heads/ao/stovo-team-1\n"), nil
+			}
+			return nil, nil
+		case strings.Contains(joined, "rev-parse --verify --quiet refs/heads/ao/stovo-team-97"):
+			return nil, exitStatusOne(t)
+		case strings.Contains(joined, "rev-parse --verify --quiet"):
+			return []byte("deadbeef\n"), nil
+		case strings.Contains(joined, "rev-parse HEAD"):
+			return []byte("deadbeef\n"), nil
+		case strings.Contains(joined, "worktree add"):
+			return nil, nil
+		default:
+			return nil, nil
+		}
+	}
+
+	info, err := ws.CreateWorkspaceProject(context.Background(), ports.WorkspaceProjectConfig{
+		ProjectID:     "stovo-team",
+		SessionID:     "stovo-team-97",
+		Kind:          domain.KindOrchestrator,
+		SessionPrefix: "stovo-team",
+		Branch:        "ao/stovo-team-97",
+		RootRepoPath:  repo,
+		BaseBranch:    "main",
+		Repos: []ports.WorkspaceProjectRepoConfig{
+			{Name: "api", RelativePath: "services/api", RepoPath: childRepo, BaseBranch: "main"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkspaceProject secondary orchestrator: %v", err)
+	}
+	if info.Root.Path != wantRootPath {
+		t.Fatalf("info.Root.Path = %q, want %q", info.Root.Path, wantRootPath)
+	}
+	if len(info.Worktrees) != 2 || info.Worktrees[1].Path != wantChildPath {
+		t.Fatalf("info.Worktrees = %#v, want child path %q", info.Worktrees, wantChildPath)
+	}
+}
+
 func mkdirFile(dir, name string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
