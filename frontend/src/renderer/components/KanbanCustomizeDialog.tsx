@@ -16,7 +16,6 @@ import {
 	Dialog,
 	DialogContent,
 	DialogDescription,
-	DialogFooter,
 	DialogHeader,
 	DialogTitle,
 	settingsDialogBodyClass,
@@ -191,11 +190,12 @@ export function KanbanCustomizeDialog({
 					) : null}
 				</div>
 
-				<DialogFooter
-					className={`${settingsDialogFooterClass} flex-nowrap justify-end gap-1`}
+				<div
+					data-slot="dialog-footer"
+					className={`${settingsDialogFooterClass} flex-row flex-nowrap items-center justify-end gap-2`}
 				>
 					<Button
-						className="min-w-0 shrink px-2"
+						className="mr-auto min-w-0 shrink px-2"
 						data-testid="kanban-reset-defaults"
 						disabled={saving}
 						onClick={() => setDraft(defaultKanbanSettings())}
@@ -229,7 +229,7 @@ export function KanbanCustomizeDialog({
 					>
 						{t("kanban.save")}
 					</Button>
-				</DialogFooter>
+				</div>
 			</DialogContent>
 		</Dialog>
 	);

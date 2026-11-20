@@ -15,7 +15,6 @@ import {
 	Dialog,
 	DialogContent,
 	DialogDescription,
-	DialogFooter,
 	DialogHeader,
 	DialogTitle,
 	settingsDialogBodyClass,
@@ -152,7 +151,7 @@ export function AddBacklogItemDialog({
 						) : null}
 					</div>
 
-					<DialogFooter className={settingsDialogFooterClass}>
+					<div data-slot="dialog-footer" className={settingsDialogFooterClass}>
 						<Button
 							disabled={saving}
 							onClick={() => onOpenChange(false)}
@@ -171,7 +170,7 @@ export function AddBacklogItemDialog({
 						>
 							{t("backlog.saveItem")}
 						</Button>
-					</DialogFooter>
+					</div>
 				</form>
 			</DialogContent>
 		</Dialog>
@@ -309,7 +308,7 @@ export function BacklogItemDetailDialog({
 					) : null}
 				</div>
 
-				<DialogFooter className={settingsDialogFooterClass}>
+				<div data-slot="dialog-footer" className={settingsDialogFooterClass}>
 					<Button
 						className="mr-auto text-destructive hover:text-destructive"
 						data-testid="backlog-delete-button"
@@ -358,7 +357,7 @@ export function BacklogItemDetailDialog({
 							{t("backlog.startTask")}
 						</Button>
 					) : null}
-				</DialogFooter>
+				</div>
 			</DialogContent>
 		</Dialog>
 	);
