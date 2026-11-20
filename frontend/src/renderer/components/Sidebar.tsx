@@ -63,7 +63,6 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { artifactCount, groupArtifactsByProject } from "../lib/artifacts";
 import { reorderWorkspaceItems, sessionMatchesWorkspaceFolder, workspaceFolderRepoForSession } from "../lib/workspace-folder";
 import { readSidebarCustomOrder, writeSidebarCustomOrder } from "../lib/sidebar-custom-order";
-import { applyOrder } from "../lib/sidebar-order";
 import {
 	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
@@ -427,30 +426,14 @@ function useShowMoreCap<T extends { id: string }>(
 }
 
 /** Folder chat lists reveal 10, 20, 40... additional rows on successive clicks. */
-function useProgressiveShowMore<T>(items: T[], initial = 5, previewNext = true) {
+function useProgressiveShowMore<T>(items: T[], initial = 5) {
 	const [visibleCount, setVisibleCount] = useState(initial);
 	const [batchSize, setBatchSize] = useState(10);
 	useEffect(() => { setVisibleCount(initial); setBatchSize(10); }, [initial, items.length]);
 	const remaining = Math.max(0, items.length - visibleCount);
-	// General retains its partially visible next row; repo projects use plain
-	// Show more text below the list with no overlapping preview.
-	const listed = items.slice(0, visibleCount + (previewNext && remaining > 0 ? 1 : 0));
+	const listed = items.slice(0, visibleCount);
 	const showMore = () => { setVisibleCount((count) => count + batchSize); setBatchSize((size) => size * 2); };
 	return { listed, remaining, showMore };
-}
-
-function FolderShowMore({ onClick }: { onClick: () => void }) {
-	const { t } = useTranslation();
-	return (
-		<button
-			className="ml-6 min-h-6 px-2 text-left text-xs text-muted-foreground hover:text-foreground"
-			data-folder-show-more=""
-			onClick={onClick}
-			type="button"
-		>
-			{t("shell.showMore")}
-		</button>
-	);
 }
 
 function SidebarSectionScroller({
@@ -1741,7 +1724,7 @@ const WorkspaceFolderBranch = memo(function WorkspaceFolderBranch({
 		() => applyOrder(sessions, (session) => session.id, chatOrder, "end"),
 		[chatOrder, sessions],
 	);
-	const { listed, remaining, showMore } = useProgressiveShowMore(orderedSessions, 5, false);
+	const { listed, remaining, showMore } = useProgressiveShowMore(orderedSessions, 5);
 	const sessionIds = useMemo(() => listed.map((session) => session.id), [listed]);
 	const commitChatOrder = useCallback((next: string[] | null) => {
 		if (!next) return;
@@ -1922,7 +1905,16 @@ const WorkspaceFolderBranch = memo(function WorkspaceFolderBranch({
 								onKilled={onKilled}
 								onOpen={onOpenSession}
 							/>
-							{remaining > 0 && <FolderShowMore onClick={showMore} />}
+							{remaining > 0 && (
+								<div className="pl-4">
+									<ShowMoreRow
+										className="px-3"
+										expanded={false}
+										label={t("shell.showMore")}
+										onClick={showMore}
+									/>
+								</div>
+							)}
 						</>
 					)}
 					<WorkspaceFolderBranchList
@@ -2119,7 +2111,6 @@ const ProjectItem = memo(function ProjectItem({
 	});
 	// The project's live orchestrator (if any) backs the hover Orchestrator
 	// button: navigate to it when present, otherwise spawn one first.
-	const orchestrator = newestActiveOrchestrator(workspace.sessions);
 	const canResumeOrchestrator = useCanResumeAgent(orchestrator, workspace.hostId);
 	const orchestratorReply = useOrchestratorReplyState({
 		projectId: workspace.id,
@@ -2673,29 +2664,34 @@ const ProjectItem = memo(function ProjectItem({
 									/>
 								)}
 								{generalOpen && rootSessions.length > 0 && (
-									<div className="relative">
-									<SessionReorderList
-										dndId={sessionDndId(`${projectKey}-root`)}
-										testId={`session-list-${projectKey}-root`}
-										className="mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1 pb-1"
-										sessions={generalCap.listed}
-										repos={workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS}
-										sessionIds={generalSessionIds}
-										activeSessionId={selection.activeSessionId}
-										plain={projectDragInProgress}
-										onReorder={commitSessionOrder}
-										onKilled={handleSessionKilled}
-										onOpen={openSession}
-									/>
-										{generalCap.remaining > 0 && (
-										<ShowMoreRow
-											className="absolute inset-x-0 bottom-0 z-20 h-5 bg-sidebar/75 px-3 backdrop-blur-[2px] shadow-sm"
-											expanded={false}
-											label={t("shell.showMore")}
-											onClick={generalCap.showMore}
+									<>
+										<SessionReorderList
+											dndId={sessionDndId(`${projectKey}-root`)}
+											testId={`session-list-${projectKey}-root`}
+											className={cn(
+												"mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1",
+												generalCap.remaining > 0 ? "pb-px" : "pb-1",
+											)}
+											sessions={generalCap.listed}
+											repos={workspace.workspaceRepos ?? EMPTY_WORKSPACE_REPOS}
+											sessionIds={generalSessionIds}
+											activeSessionId={selection.activeSessionId}
+											plain={projectDragInProgress}
+											onReorder={commitSessionOrder}
+											onKilled={handleSessionKilled}
+											onOpen={openSession}
 										/>
+										{generalCap.remaining > 0 && (
+											<div className="pl-4">
+												<ShowMoreRow
+													className="px-3"
+													expanded={false}
+													label={t("shell.showMore")}
+													onClick={generalCap.showMore}
+												/>
+											</div>
 										)}
-									</div>
+									</>
 								)}
 							<WorkspaceFolderBranchList
 								workspace={workspace}
