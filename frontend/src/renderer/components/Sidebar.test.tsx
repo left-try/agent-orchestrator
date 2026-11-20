@@ -5085,11 +5085,35 @@ describe("Memoized Sidebar with unchanged props", () => {
 			const sessionList = () => document.querySelectorAll('[data-testid="session-list-mf-workspace-services/api"] [data-session-name]');
 			expect(sessionList()).toHaveLength(5);
 			const branch = document.querySelector('[data-workspace-folder-branch="services/api"]') as HTMLElement;
-			expect(within(branch).getByRole("button", { name: "Show more" })).toHaveAttribute("data-folder-show-more");
-			await userEvent.click(screen.getByRole("button", { name: /^Show more/ }));
+			const showMoreButton = within(branch).getByRole("button", { name: "Show more" });
+			expect(showMoreButton.className).not.toContain("absolute");
+			await userEvent.click(showMoreButton);
 			expect(sessionList()).toHaveLength(15);
-			await userEvent.click(screen.getByRole("button", { name: /^Show more/ }));
+			await userEvent.click(within(branch).getByRole("button", { name: /^Show more/ }));
 			expect(sessionList()).toHaveLength(26);
+		});
+
+		it("renders General folder Show more without overlapping an extra preview row", async () => {
+			const generalChats = Array.from({ length: 8 }, (_, index) => ({
+				...session,
+				id: `general-chat-${index + 1}`,
+				title: `General chat ${index + 1}`,
+			}));
+			const multiFolderWorkspace: WorkspaceSummary = {
+				id: "mf-workspace",
+				name: "Mono Repo",
+				path: "/repo/mono",
+				kind: "workspace",
+				workspaceRepos: [{ name: "api", relativePath: "services/api", repo: "acme/api" }],
+				sessions: generalChats,
+			};
+			renderSidebar({ workspaces: [multiFolderWorkspace] });
+			const generalList = () => document.querySelectorAll('[data-testid="session-list-mf-workspace-root"] [data-session-name]');
+			expect(generalList()).toHaveLength(5);
+			const showMoreButton = screen.getByRole("button", { name: "Show more" });
+			expect(showMoreButton.className).not.toContain("absolute");
+			await userEvent.click(showMoreButton);
+			expect(generalList()).toHaveLength(8);
 		});
 	});
 });
