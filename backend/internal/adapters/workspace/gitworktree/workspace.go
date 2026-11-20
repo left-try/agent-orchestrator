@@ -324,15 +324,29 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	if info, ok, err := w.existingWorktree(ctx, repo, path, cfg); err != nil {
 		return ports.WorkspaceInfo{}, err
 	} else if ok {
-		if cfg.FreshBranch {
-			return ports.WorkspaceInfo{}, fmt.Errorf("gitworktree: prepared workspace path %q already exists", path)
+		if cfg.Kind == domain.KindOrchestrator && info.Branch != "" && cfg.Branch != "" && info.Branch != cfg.Branch {
+			// Another orchestrator session (for example, the project root orchestrator)
+			// already occupies the shared <prefix>-orchestrator path. Isolate this
+			// secondary/folder orchestrator under its own session-scoped directory.
+			path, err = w.orchestratorSessionPath(cfg.ProjectID, cfg.SessionID)
+			if err != nil {
+				return ports.WorkspaceInfo{}, err
+			}
+			if info, ok, err = w.existingWorktree(ctx, repo, path, cfg); err != nil {
+				return ports.WorkspaceInfo{}, err
+			}
 		}
-		refs, err := w.resolveWorktreeRefsWithBudget(ctx, repo, cfg.Branch, cfg.BaseBranch)
-		if err != nil {
-			return ports.WorkspaceInfo{}, err
+		if ok {
+			if cfg.FreshBranch {
+				return ports.WorkspaceInfo{}, fmt.Errorf("gitworktree: prepared workspace path %q already exists", path)
+			}
+			refs, err := w.resolveWorktreeRefsWithBudget(ctx, repo, cfg.Branch, cfg.BaseBranch)
+			if err != nil {
+				return ports.WorkspaceInfo{}, err
+			}
+			info.BaseRef = refs.baseRef
+			return info, nil
 		}
-		info.BaseRef = refs.baseRef
-		return info, nil
 	}
 	seedRef := ""
 	seedSHA := ""
@@ -431,15 +445,30 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 	if err := w.enableWorktreeConfig(ctx, rootRepo); err != nil {
 		return ports.WorkspaceProjectInfo{}, err
 	}
+	requestedBranch := firstNonEmpty(cfg.Branch, defaultSessionBranchName(cfg.SessionID))
 	rootPath, err := w.managedPath(ports.WorkspaceConfig{
 		ProjectID:     cfg.ProjectID,
 		SessionID:     cfg.SessionID,
 		Kind:          cfg.Kind,
 		SessionPrefix: cfg.SessionPrefix,
-		Branch:        firstNonEmpty(cfg.Branch, defaultSessionBranchName(cfg.SessionID)),
+		Branch:        requestedBranch,
 	})
 	if err != nil {
 		return ports.WorkspaceProjectInfo{}, err
+	}
+	if cfg.Kind == domain.KindOrchestrator {
+		rootRecords, err := w.listRecords(ctx, rootRepo)
+		if err != nil {
+			return ports.WorkspaceProjectInfo{}, err
+		}
+		if record, ok := findWorktree(rootRecords, rootPath); ok && record.Branch != "" && record.Branch != requestedBranch {
+			// Another orchestrator session already owns <prefix>-orchestrator; give
+			// this secondary/nested-folder orchestrator its own session-scoped path.
+			rootPath, err = w.orchestratorSessionPath(cfg.ProjectID, cfg.SessionID)
+			if err != nil {
+				return ports.WorkspaceProjectInfo{}, err
+			}
+		}
 	}
 	repos := make([]workspaceProjectRepo, 0, len(cfg.Repos)+1)
 	repos = append(repos, workspaceProjectRepo{
@@ -473,7 +502,6 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 			baseRef:      child.BaseRef,
 		})
 	}
-	requestedBranch := firstNonEmpty(cfg.Branch, defaultSessionBranchName(cfg.SessionID))
 	existing := make(map[int]struct{}, len(repos))
 	recovering := false
 	for i, repo := range repos {
@@ -2413,6 +2441,10 @@ func (w *Workspace) managedPath(cfg ports.WorkspaceConfig) (string, error) {
 		path = filepath.Join(w.managedRoot, string(cfg.ProjectID), string(cfg.SessionID))
 	}
 	return w.validateManagedPath(path)
+}
+
+func (w *Workspace) orchestratorSessionPath(projectID domain.ProjectID, sessionID domain.SessionID) (string, error) {
+	return w.validateManagedPath(filepath.Join(w.managedRoot, string(projectID), "orchestrator", string(sessionID)))
 }
 
 func (w *Workspace) restorePath(cfg ports.WorkspaceConfig) (string, error) {
