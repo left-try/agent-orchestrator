@@ -15267,6 +15267,105 @@ paths:
       summary: ""
       tags:
       - conversations
+  /api/v1/storage/cleanup:
+    post:
+      operationId: runStorageCleanup
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageCleanupRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageCleanupResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Safely remove clean terminated worktrees and preview caches
+      tags:
+      - settings
+  /api/v1/storage/policy:
+    patch:
+      operationId: updateStoragePolicy
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStoragePolicyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoragePolicyDTO'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Update automatic storage retention and worktree cleanup policy
+      tags:
+      - settings
+  /api/v1/storage/usage:
+    get:
+      operationId: getStorageUsage
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageUsageResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Inspect disk usage across worktrees, artifacts, database, and projects
+      tags:
+      - settings
   /api/v1/system/github-auth:
     get:
       operationId: getGitHubAuthRequirement
@@ -22867,6 +22966,41 @@ components:
       required:
       - project
       type: object
+    ProjectStorageUsageDTO:
+      properties:
+        activeWorktreeCount:
+          type: integer
+        artifactsBytes:
+          format: int64
+          type: integer
+        projectId:
+          type: string
+        projectName:
+          type: string
+        reclaimableBytes:
+          format: int64
+          type: integer
+        reclaimableWorktreeCount:
+          type: integer
+        totalBytes:
+          format: int64
+          type: integer
+        worktreeCount:
+          type: integer
+        worktreesBytes:
+          format: int64
+          type: integer
+      required:
+      - projectId
+      - projectName
+      - worktreesBytes
+      - worktreeCount
+      - activeWorktreeCount
+      - reclaimableWorktreeCount
+      - reclaimableBytes
+      - artifactsBytes
+      - totalBytes
+      type: object
     ProjectSummary:
       properties:
         autoSpawnPauses:
@@ -26116,6 +26250,99 @@ components:
       - outcome
       - duplicate
       type: object
+    StorageCleanupRequest:
+      properties:
+        includeArtifactPreviews:
+          type: boolean
+        olderThanDays:
+          type: integer
+        projectId:
+          type: string
+      required:
+      - includeArtifactPreviews
+      type: object
+    StorageCleanupResponse:
+      properties:
+        freedBytes:
+          format: int64
+          type: integer
+        removedArtifactPreviews:
+          type: integer
+        removedWorktrees:
+          type: integer
+        skippedActive:
+          type: integer
+        skippedDirty:
+          type: integer
+      required:
+      - removedWorktrees
+      - removedArtifactPreviews
+      - freedBytes
+      - skippedDirty
+      - skippedActive
+      type: object
+    StoragePolicyDTO:
+      properties:
+        autoCleanupEnabled:
+          type: boolean
+        maxWorktreesPerProject:
+          type: integer
+        retentionDays:
+          type: integer
+      required:
+      - autoCleanupEnabled
+      - retentionDays
+      - maxWorktreesPerProject
+      type: object
+    StorageUsageResponse:
+      properties:
+        artifactCount:
+          type: integer
+        artifactsBytes:
+          format: int64
+          type: integer
+        attachmentsBytes:
+          format: int64
+          type: integer
+        dataDir:
+          type: string
+        databaseBytes:
+          format: int64
+          type: integer
+        otherBytes:
+          format: int64
+          type: integer
+        policy:
+          $ref: '#/components/schemas/StoragePolicyDTO'
+        projects:
+          items:
+            $ref: '#/components/schemas/ProjectStorageUsageDTO'
+          type: array
+        reclaimableBytes:
+          format: int64
+          type: integer
+        totalBytes:
+          format: int64
+          type: integer
+        worktreeCount:
+          type: integer
+        worktreesBytes:
+          format: int64
+          type: integer
+      required:
+      - dataDir
+      - totalBytes
+      - databaseBytes
+      - worktreesBytes
+      - worktreeCount
+      - artifactsBytes
+      - artifactCount
+      - attachmentsBytes
+      - otherBytes
+      - reclaimableBytes
+      - projects
+      - policy
+      type: object
     SubmitAgentUILoginCodeRequest:
       properties:
         code:
@@ -26672,6 +26899,19 @@ components:
           type: string
       required:
       - title
+      type: object
+    UpdateStoragePolicyRequest:
+      properties:
+        autoCleanupEnabled:
+          type: boolean
+        maxWorktreesPerProject:
+          type: integer
+        retentionDays:
+          type: integer
+      required:
+      - autoCleanupEnabled
+      - retentionDays
+      - maxWorktreesPerProject
       type: object
     UpdateVersionRefreshRequest:
       properties:

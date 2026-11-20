@@ -4797,3 +4797,62 @@ type ForkSessionResponse struct {
 	SessionID   domain.SessionID `json:"sessionId"`
 	DisplayName string           `json:"displayName"`
 }
+
+// StoragePolicyDTO configures automatic worktree retention and cleanup.
+type StoragePolicyDTO struct {
+	AutoCleanupEnabled     bool `json:"autoCleanupEnabled"`
+	RetentionDays          int  `json:"retentionDays"`
+	MaxWorktreesPerProject int  `json:"maxWorktreesPerProject"`
+}
+
+// ProjectStorageUsageDTO summarizes disk usage for a single project.
+type ProjectStorageUsageDTO struct {
+	ProjectID                string `json:"projectId"`
+	ProjectName              string `json:"projectName"`
+	WorktreesBytes           int64  `json:"worktreesBytes"`
+	WorktreeCount            int    `json:"worktreeCount"`
+	ActiveWorktreeCount      int    `json:"activeWorktreeCount"`
+	ReclaimableWorktreeCount int    `json:"reclaimableWorktreeCount"`
+	ReclaimableBytes         int64  `json:"reclaimableBytes"`
+	ArtifactsBytes           int64  `json:"artifactsBytes"`
+	TotalBytes               int64  `json:"totalBytes"`
+}
+
+// StorageUsageResponse is the body of GET /api/v1/storage/usage.
+type StorageUsageResponse struct {
+	DataDir          string                   `json:"dataDir"`
+	TotalBytes       int64                    `json:"totalBytes"`
+	DatabaseBytes    int64                    `json:"databaseBytes"`
+	WorktreesBytes   int64                    `json:"worktreesBytes"`
+	WorktreeCount    int                      `json:"worktreeCount"`
+	ArtifactsBytes   int64                    `json:"artifactsBytes"`
+	ArtifactCount    int                      `json:"artifactCount"`
+	AttachmentsBytes int64                    `json:"attachmentsBytes"`
+	OtherBytes       int64                    `json:"otherBytes"`
+	ReclaimableBytes int64                    `json:"reclaimableBytes"`
+	Projects         []ProjectStorageUsageDTO `json:"projects"`
+	Policy           StoragePolicyDTO         `json:"policy"`
+}
+
+// UpdateStoragePolicyRequest is the body of PATCH /api/v1/storage/policy.
+type UpdateStoragePolicyRequest struct {
+	AutoCleanupEnabled     bool `json:"autoCleanupEnabled"`
+	RetentionDays          int  `json:"retentionDays"`
+	MaxWorktreesPerProject int  `json:"maxWorktreesPerProject"`
+}
+
+// StorageCleanupRequest is the body of POST /api/v1/storage/cleanup.
+type StorageCleanupRequest struct {
+	ProjectID               string `json:"projectId,omitempty"`
+	IncludeArtifactPreviews bool   `json:"includeArtifactPreviews"`
+	OlderThanDays           int    `json:"olderThanDays,omitempty"`
+}
+
+// StorageCleanupResponse is the body of POST /api/v1/storage/cleanup.
+type StorageCleanupResponse struct {
+	RemovedWorktrees        int   `json:"removedWorktrees"`
+	RemovedArtifactPreviews int   `json:"removedArtifactPreviews"`
+	FreedBytes              int64 `json:"freedBytes"`
+	SkippedDirty            int   `json:"skippedDirty"`
+	SkippedActive           int   `json:"skippedActive"`
+}

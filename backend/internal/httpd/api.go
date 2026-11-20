@@ -69,6 +69,7 @@ type APIDeps struct {
 	ConversationSearch controllers.ConversationSearch
 	// Settings is the daemon-owned preference surface.
 	Settings  controllers.SettingsService
+	Storage   controllers.StorageService
 	DevImport controllers.DevImportService
 	CDC       cdc.Source
 	Events    cdcSubscriber
@@ -179,6 +180,7 @@ type API struct {
 	backlog       *controllers.BacklogController
 	conversations *controllers.ConversationsController
 	settings      *controllers.SettingsController
+	storage       *controllers.StorageController
 	dev           *controllers.DevController
 	browser       *controllers.BrowserController
 	panes         *controllers.PanesController
@@ -249,6 +251,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		backlog:       &controllers.BacklogController{Svc: deps.Backlog},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch, UserMessages: userMessageRecorder(deps.Sessions)},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
+		storage:       &controllers.StorageController{Svc: deps.Storage},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
 		panes:         &controllers.PanesController{Svc: deps.Panes, Terminals: deps.PaneTerminals, Sessions: deps.Sessions, Capabilities: deps.SessionCapabilities},
@@ -415,6 +418,7 @@ func (a *API) Register(root chi.Router) {
 			a.linkPreview.Register(r)
 			a.sessionSearch.Register(r)
 			a.github.Register(r)
+			a.storage.Register(r)
 			// Sibling REST controllers plug in here.
 		})
 		// Long-lived streams intentionally bypass the REST timeout middleware.

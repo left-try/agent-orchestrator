@@ -30,6 +30,7 @@ export type ChatSendKeyMode = "enter" | "mod-enter";
 
 export type GlobalSettingsSection =
 	| "general"
+	| "storage"
 	| "harness"
 	| "teams"
 	| "billing"

@@ -67,6 +67,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 	awakesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/awake"
 	backlogsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/backlog"
+	storagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/storage"
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
@@ -1278,6 +1279,7 @@ func Run(buildVersion string) (retErr error) {
 		Conversations:      chatSvc,
 		ConversationSearch: store,
 		Settings:           settingsSvc,
+		Storage:            storagesvc.New(cfg.DataDir, storageMetadataAdapter{store: store}),
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
 		Activity:           hookActivity,
